@@ -10,7 +10,8 @@
       "installZsh": true,
       "configureZshAsDefaultShell": true,
       "installOhMyZsh": true
-    }
+    },
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
   },
   // Live bind-mount of host-regenerated .env: runArgs --env-file is frozen at docker-create time, so the bind reflects the file initializeCommand rewrites before each start.
   "mounts": [
@@ -55,10 +56,16 @@
     // Agent shells run under a PTY: git/gh pagers block forever without these.
     "GIT_PAGER": "cat",
     "GH_PAGER": "cat",
+    // Workaround for oven-sh/bun#31409 (bun embedded in the opencode SEA
+    // corrupts the heap under concurrent GC); harmless once fixed upstream.
+    "BUN_JSC_useConcurrentGC": "0",
     // ccache state lives on the ccache-volume named volume so compilation caches survive rebuilds.
     "CCACHE_DIR": "/mnt/ccache",
     // Default mtime-based compiler check misses after toolchain upgrades across rebuilds; content check keeps hits stable.
     "CCACHE_COMPILERCHECK": "content"
+    // Claude Code auth rides CLAUDE_CODE_OAUTH_TOKEN from the env staging file
+    // (.devcontainer/.env, rewritten by initializeCommand on every start);
+    // no config-dir override, so claude uses its writable container-local home.
   },
   "remoteEnv": {
     "PATH": "/usr/local/bin:/home/vscode/.opencode/bin:/home/vscode/.local/bin:${containerEnv:PATH}"

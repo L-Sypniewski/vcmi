@@ -14,6 +14,9 @@ esac
 DEVCONTAINER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$DEVCONTAINER_DIR/.env"
 ENV_TMP="$(mktemp)"
+# Claude Code setup-token, minted once on the host (`claude setup-token`) -
+# same file the Alpio devcontainer uses, so an existing token works unchanged.
+CLAUDE_TOKEN_FILE="$HOME/.config/alpio-devcontainer/claude-token"
 
 # gh's token lives in the OS keyring (libsecret); VS Code's initializeCommand subprocess often lacks DBUS_SESSION_BUS_ADDRESS, so point it at the user bus.
 if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "/run/user/$(id -u)/bus" ]]; then
@@ -42,6 +45,18 @@ MCP_ENV_REFS="$(grep -ohE '\{env:[A-Za-z_][A-Za-z0-9_]*\}' \
   GH_TOKEN_VAL="$(gh auth token 2>/dev/null || echo '')"
   echo "GH_TOKEN=$GH_TOKEN_VAL"
   echo "GITHUB_TOKEN=$GH_TOKEN_VAL"
+  # One-year claude setup-token, forwarded like GH_TOKEN above; a missing
+  # or blank file means the container runs without claude auth (WARN only -
+  # claude stays unauthenticated, everything else works).
+  CLAUDE_TOKEN_VAL=""
+  if [[ -s "$CLAUDE_TOKEN_FILE" ]]; then
+    CLAUDE_TOKEN_VAL="$(head -n1 "$CLAUDE_TOKEN_FILE" 2>/dev/null | tr -d '[:space:]' || true)"
+  fi
+  if [[ -n "$CLAUDE_TOKEN_VAL" ]]; then
+    echo "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_TOKEN_VAL"
+  else
+    echo "[devcontainer] WARN: claude token missing or blank at $CLAUDE_TOKEN_FILE (Claude Code will be unauthenticated in the container)" >&2
+  fi
 } > "$ENV_TMP"
 
 # Overwrite in place (same inode): devcontainer.json bind-mounts this file into the container, and a re-attached (not restarted) container keeps its mount on the original inode. Deleting+recreating would orphan the mount until a real stop/start, silently sourcing stale values.
