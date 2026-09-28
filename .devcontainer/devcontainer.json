@@ -38,8 +38,10 @@
   ],
   // Fix ownership BEFORE installers: the opencode auth/mcp-auth binds make Docker create /home/vscode/.local/... as root-owned;
   // the /mnt/ccache and /mnt/h3-data named volumes must be vscode-owned for their writers.
-  // The C++ toolchain comes from apt (postCreateCommand, per docs/developers/Building_Linux.md); opencode stays curl-installed as a self-updating CLI.
-  "onCreateCommand": "sudo mkdir -p /home/vscode/.local/share/opencode /mnt/ccache /mnt/h3-data && sudo chown -R vscode:vscode /home/vscode/.local /mnt/ccache /mnt/h3-data && curl -fsSL https://opencode.ai/install | bash",
+  // The C++ toolchain comes from apt (postCreateCommand, per docs/developers/Building_Linux.md); opencode stays curl-installed as a
+  // self-updating CLI. The symlink puts it on PATH for non-interactive shells (devcontainer exec / agent PTYs don't source rc files;
+  // the installer's ~/.opencode/bin is otherwise reachable only interactively).
+  "onCreateCommand": "sudo mkdir -p /home/vscode/.local/share/opencode /mnt/ccache /mnt/h3-data && sudo chown -R vscode:vscode /home/vscode/.local /mnt/ccache /mnt/h3-data && curl -fsSL https://opencode.ai/install | bash && sudo ln -sf /home/vscode/.opencode/bin/opencode /usr/local/bin/opencode",
   // Full vcmi build+test deps from docs/developers/Building_Linux.md (Ubuntu), then submodules (googletest for vcmitest,
   // vcmi-dependencies) and a warm configure of the test preset to validate the toolchain end-to-end (soft-fail: slow networks
   // shouldn't block container creation - rerun manually if skipped). ENABLE_MMAI=OFF: Ubuntu 24.04 apt has no onnxruntime
@@ -59,7 +61,7 @@
     "CCACHE_COMPILERCHECK": "content"
   },
   "remoteEnv": {
-    "PATH": "/usr/local/bin:${containerEnv:PATH}"
+    "PATH": "/usr/local/bin:/home/vscode/.opencode/bin:/home/vscode/.local/bin:${containerEnv:PATH}"
   },
   "customizations": {
     "vscode": {
