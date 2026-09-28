@@ -1,0 +1,69 @@
+{
+  "name": "VCMI",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "workspaceMount": "source=vcmi-${localWorkspaceFolderBasename},target=/workspace,type=volume",
+  "workspaceFolder": "/workspace",
+  "initializeCommand": "bash .devcontainer/init-volume.sh",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1.1.1": {},
+    "ghcr.io/devcontainers/features/common-utils:2.5.9": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true,
+      "installOhMyZsh": true
+    }
+  },
+  // Live bind-mount of host-regenerated .env: runArgs --env-file is frozen at docker-create time, so the bind reflects the file initializeCommand rewrites before each start.
+  "mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/.env,target=/etc/devcontainer/host.env,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.zshrc,target=/tmp/host-zshrc,type=bind,consistency=cached",
+    "source=${localWorkspaceFolder}/.devcontainer/opencode-auth.json,target=/home/vscode/.local/share/opencode/auth.json,type=bind,consistency=cached",
+    "source=${localWorkspaceFolder}/.devcontainer/opencode-mcp-auth.json,target=/home/vscode/.local/share/opencode/mcp-auth.json,type=bind,consistency=cached",
+    "source=ccache-volume,target=/mnt/ccache,type=volume"
+  ],
+  // hostRequirements = START-GATE / warning only (devcontainer spec). NOT a runtime cap.
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "64gb"
+  },
+  // runArgs --memory = the ACTUAL cgroup enforcement (OOM-kills inside the container). Keep in sync with hostRequirements.memory above.
+  // runArgs --cpu-shares = soft work-conserving weight: bounds the container only under contention; bursts to all cores when idle.
+  // 512 -> cgroup cpu.weight 59 vs host default 100 on runc >= 1.2 (legacy runc maps it to 20 - same proportional semantics).
+  "runArgs": [
+    "--memory=8gb",
+    "--cpu-shares=512",
+    "--env-file",
+    "${localWorkspaceFolder}/.devcontainer/.env"
+  ],
+  // Fix ownership BEFORE installers: the opencode auth/mcp-auth binds make Docker create /home/vscode/.local/... as root-owned;
+  // the /mnt/ccache named volume must be vscode-owned for ccache to write it.
+  // The C++ toolchain comes from apt (postCreateCommand, per docs/developers/Building_Linux.md); opencode stays curl-installed as a self-updating CLI.
+  "onCreateCommand": "sudo mkdir -p /home/vscode/.local/share/opencode /mnt/ccache && sudo chown -R vscode:vscode /home/vscode/.local /mnt/ccache && curl -fsSL https://opencode.ai/install | bash",
+  // Full vcmi build+test deps from docs/developers/Building_Linux.md (Ubuntu), then submodules (googletest for vcmitest,
+  // vcmi-dependencies) and a warm configure of the test preset to validate the toolchain end-to-end (soft-fail: slow networks
+  // shouldn't block container creation - rerun manually if skipped).
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.local && sudo apt-get update && sudo apt-get install -y cmake g++ clang libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libsdl2-mixer-dev zlib1g-dev libavformat-dev libswscale-dev libboost-dev libboost-filesystem-dev libboost-program-options-dev libboost-date-time-dev libboost-iostreams-dev qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools qt6-svg-dev libtbb-dev libluajit-5.1-dev liblzma-dev libsqlite3-dev libminizip-dev libsquish-dev libfmt-dev ninja-build ccache ripgrep && git submodule update --init --recursive && { cmake --preset linux-gcc-test || echo 'WARN: test-preset configure failed - run it manually in the container terminal'; } && cp /tmp/host-zshrc /home/vscode/.zshrc 2>/dev/null; echo 'set -a; . /etc/devcontainer/host.env 2>/dev/null; set +a' >> /home/vscode/.zshrc; echo 'set -a; . /etc/devcontainer/host.env 2>/dev/null; set +a' >> /home/vscode/.bashrc; echo 'alias opencode=\"opencode --auto\"' >> /home/vscode/.zshrc; echo 'alias opencode=\"opencode --auto\"' >> /home/vscode/.bashrc || true",
+  // postStart shells do not source rc files, so exports are explicit where needed.
+  "postStartCommand": "bash .devcontainer/set-git-identity.sh || true",
+  "containerEnv": {
+    // Agent shells run under a PTY: git/gh pagers block forever without these.
+    "GIT_PAGER": "cat",
+    "GH_PAGER": "cat",
+    // ccache state lives on the ccache-volume named volume so compilation caches survive rebuilds.
+    "CCACHE_DIR": "/mnt/ccache",
+    // Default mtime-based compiler check misses after toolchain upgrades across rebuilds; content check keeps hits stable.
+    "CCACHE_COMPILERCHECK": "content"
+  },
+  "remoteEnv": {
+    "PATH": "/usr/local/bin:${containerEnv:PATH}"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-vscode.cmake-tools",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}
