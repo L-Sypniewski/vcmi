@@ -167,7 +167,12 @@ every one** before implementing:
   `cmake --build --preset macos-ninja-test` for anything that compiles
   (warnings-as-errors is ON via `ENABLE_STRICT_COMPILATION`), plus a
   `--gtest_filter`-scoped run of just the phase's own new/changed tests - NOT
-  an unfiltered full `vcmitest` run. `ship` step 2b already runs the full
+  an unfiltered full `vcmitest` run. Test invocations run from
+  `out/build/macos-ninja-test/bin/` (the resource loader resolves
+  `CONFIG/FILESYSTEM` relative to cwd) and under `timeout` (GNU coreutils -
+  exit 124 = hang = failure); exclude
+  `--gtest_filter=-Nullkiller2_Behaviors_GatherArmyBehavior.*` on full runs
+  (that suite deadlocks on this machine). `ship` step 2b already runs the full
   diff-scoped regression sweep right after implementation, so an unfiltered
   full-suite phase Verify duplicates that cost. Treat an unfiltered
   full-suite Verify with no stated reason as a plan defect to surface
@@ -230,7 +235,9 @@ working: spawn a worker, do not route around it via bash.
    re-run filtered (`./out/build/macos-ninja-test/bin/vcmitest
    --gtest_filter='SuiteName*'` - one process, slow global init paid once),
    but each build+link cycle is the real cost, so prefer test-first for
-   logic-heavy slices and test-alongside for wide mechanical ones. TDD
+   logic-heavy slices and test-alongside for wide mechanical ones. (Test runs
+   go through `out/build/macos-ninja-test/bin/` under `timeout` - see A.1.)
+   TDD
    ordering is prompt-enforced per task, not a blanket rule. When you fan a
    phase out to several source-touching workers, decide consciously per task
    whether it genuinely needs its own red/green proof now, or whether the
@@ -307,9 +314,11 @@ After the last phase's A.3 Verify passes, run ONE full regression check
 Derive the diff-scope gate the same way `.opencode/agents/ship.md` step 2b
 does (`git diff origin/develop...HEAD --name-only`): C++/CMake source changed
 → `cmake --build --preset macos-ninja-test` then ONE full
-`./out/build/macos-ninja-test/bin/vcmitest` run; game data/scripts only
-(`config/**`, `scripts/**`) → full `vcmitest` run only; docs/meta-only diff →
-skip entirely; mixed/any doubt → build + full tests. Delegate to a `worker`
+`cd out/build/macos-ninja-test/bin && timeout 1800 ./vcmitest
+--gtest_filter='-Nullkiller2_Behaviors_GatherArmyBehavior.*'` run; game
+data/scripts only (`config/**`, `scripts/**`) → full `vcmitest` run only;
+docs/meta-only diff → skip entirely; mixed/any doubt → build + full tests.
+Delegate to a `worker`
 (bash + report pass/fail only) rather than running full-suite output through
 your own context. **Hard-fail** on failure, same as A.3.
 
@@ -440,8 +449,10 @@ regression test - TDD, red-first. For each such fix, the applying worker:
 1. Writes the regression test FIRST (a new test in the matching `test/`
    subdirectory exercising the broken path, asserting the correct behavior).
    New test files must be registered in `test/CMakeLists.txt` (`test_SRCS`).
-2. Builds and runs it against the UNPATCHED code (`./out/build/macos-ninja-test/bin/vcmitest
-   --gtest_filter='NewSuite*'`) and confirms it FAILS (reproduces the defect).
+2. Builds and runs it against the UNPATCHED code (from
+   `out/build/macos-ninja-test/bin/`:
+   `timeout 300 ./vcmitest --gtest_filter='NewSuite*'`) and confirms it FAILS
+   (reproduces the defect).
    If it passes pre-fix, the test does not catch the bug - revise it until it
    fails for the right reason.
 3. Applies the fix.

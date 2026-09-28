@@ -180,8 +180,9 @@ Run this in step 8 (plan + execute mode) or as the entire flow (execute-only mod
    mark the todo `completed` AND tick the plan
    file's checkbox (`- [ ]` → `- [x]`).
 4. **Per phase**: after all its tasks land, run the phase's `**Verify**` command via
-   `bash` (e.g. `cmake --build --preset macos-ninja-test`, or
-   `./out/build/macos-ninja-test/bin/vcmitest --gtest_filter='SuiteName*'`).
+   `bash` (e.g. `cmake --build --preset macos-ninja-test`, or - from
+   `out/build/macos-ninja-test/bin/` - `timeout 300 ./vcmitest
+   --gtest_filter='SuiteName*'`).
    Use `bash` ONLY for verify commands - all other work is delegated to workers.
    **Hard-fail**: if verify fails, stop, leave the todo + checkboxes reflecting
    reality, and report the failure to the user.
@@ -197,7 +198,10 @@ Run this in step 8 (plan + execute mode) or as the entire flow (execute-only mod
    `git diff origin/develop...HEAD --name-only` - same rules
    `.opencode/agents/ship.md` step 2b uses: C++/CMake source changed →
    `cmake --build --preset macos-ninja-test` + ONE full
-   `./out/build/macos-ninja-test/bin/vcmitest` run; game data/scripts only →
+   `cd out/build/macos-ninja-test/bin && timeout 1800 ./vcmitest
+   --gtest_filter='-Nullkiller2_Behaviors_GatherArmyBehavior.*'` run (the
+   excluded suite deadlocks on this machine; `timeout` exit 124 = hang =
+   failure); game data/scripts only →
    full `vcmitest` run; docs/meta-only diff → skip entirely; mixed/any doubt →
    build + full tests. Delegate to a `general` worker
    via the Task tool (same channel step 3 uses) rather than running

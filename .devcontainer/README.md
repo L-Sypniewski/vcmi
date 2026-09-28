@@ -32,9 +32,17 @@ checkout.
 # 3. From the container terminal:
 cmake --preset linux-gcc-test          # configure (run once; postCreate warm-configures it)
 cmake --build --preset linux-gcc-test  # build (warnings-as-errors ON)
-./out/build/linux-gcc-test/bin/vcmitest                      # full unit suite (ONE process)
-./out/build/linux-gcc-test/bin/vcmitest --gtest_filter='Suite*'  # filtered
+cd out/build/linux-gcc-test/bin
+timeout 1800 ./vcmitest                          # full unit suite (ONE process; exit 124 = hang)
+timeout 300 ./vcmitest --gtest_filter='Suite*'   # filtered
 ```
+
+(`timeout` is GNU coreutils - in the base image on Linux; on the macOS host
+it comes from `brew install coreutils`. On the macOS host build one suite -
+`Nullkiller2_Behaviors_GatherArmyBehavior.upgradesPikemenCarriedByGarrisonHero`
+- deadlocks; exclude it there via
+`--gtest_filter=-Nullkiller2_Behaviors_GatherArmyBehavior.*`. Linux runs it
+fine in upstream CI.)
 
 The container uses a **named Docker volume** (not a bind mount) seeded with a
 clone of the current branch from the fork (`L-Sypniewski/vcmi` - override with

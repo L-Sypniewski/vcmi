@@ -68,7 +68,7 @@ Fixes #NNN[, #MMMM]
 
 - [ ] **N.1** <task> - `path/file.ext:line` - rationale
 - [ ] **N.2** <task> ⚠️ <one-line risk, HIGH only> - `path/file.ext:line` - rationale
-      **Verify**: `cmake --build --preset macos-ninja-test`, then `./out/build/macos-ninja-test/bin/vcmitest --gtest_filter='NewSuite*'` scoped to this phase's own new/changed tests. Full unfiltered suite only with a stated reason - see Rules.
+      **Verify**: `cmake --build --preset macos-ninja-test`, then (from `out/build/macos-ninja-test/bin/`) `timeout 300 ./vcmitest --gtest_filter='NewSuite*'` scoped to this phase's own new/changed tests. Full unfiltered suite only with a stated reason - see Rules.
       **Commit**: <optional one-line commit message for this phase; omit if no commit is desired>
 
 ## Key Risks & Mitigations (omit entirely if none worth flagging)
@@ -116,8 +116,10 @@ Fixes #NNN[, #MMMM]
 - Include a `**Verify**` step per phase. Default: a compile check
   (`cmake --build --preset macos-ninja-test` - warnings-as-errors is ON via
   `ENABLE_STRICT_COMPILATION`) plus a `--gtest_filter`-scoped run of just this
-  phase's own new/changed test suites (`./out/build/macos-ninja-test/bin/vcmitest
-  --gtest_filter='A*|B*'`) - NOT the unfiltered full suite. `@ship` step 2b runs
+  phase's own new/changed test suites (from `out/build/macos-ninja-test/bin/`:
+  `timeout 300 ./vcmitest --gtest_filter='A*|B*'` - the resource loader
+  resolves `CONFIG/FILESYSTEM` relative to cwd, and `timeout` exit 124 = hang
+  = failure) - NOT the unfiltered full suite. `@ship` step 2b runs
   the full diff-scoped regression sweep right after implementation, so a full
   `vcmitest` per phase on top of that is duplicated build+init cost. Only
   specify the full unfiltered suite when a phase has a concrete reason to need

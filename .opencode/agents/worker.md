@@ -149,14 +149,17 @@ tools/sources to use, output format, boundaries, and report-back expectations.
    (`cmake --build --preset macos-ninja-test`, optionally scoped to the
    affected target via `--target <name>`) unless the task specifically calls
    for TDD red/green confirmation of a new test. When it does (TDD red-first:
-   confirm your new test fails, then passes), run ONLY that suite via
-   `./out/build/macos-ninja-test/bin/vcmitest --gtest_filter='SuiteName*'` -
+   confirm your new test fails, then passes), run ONLY that suite - from
+   `out/build/macos-ninja-test/bin/` (the resource loader resolves
+   `CONFIG/FILESYSTEM` relative to cwd; from anywhere else every test fails
+   at global setup): `timeout 300 ./vcmitest --gtest_filter='SuiteName*'` -
    never loop broader or repeated invocations than the task asks for; if your
    task's instructions name more than one suite to confirm, combine them in
    ONE invocation via in-filter OR (`--gtest_filter='A*|B*'`), never one
    invocation per suite (each vcmitest process pays vcmi's slow global
    initialization - `test/CMakeLists.txt` warns against per-test ctest for
-   exactly this reason). Report pass/fail + a short reference
+   exactly this reason). `timeout` (GNU coreutils) exit 124 = hang = failure -
+   report it, do not wait it out. Report pass/fail + a short reference
    (file:line / assertion), not whole logs.
 
 ## What you do NOT do
