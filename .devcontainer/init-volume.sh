@@ -123,13 +123,16 @@ trap 'rm -rf "$TEMP_CLONE"' EXIT
 echo "[devcontainer] Cloning '$VCMI_REPO' branch '$BRANCH'..."
 gh repo clone "$VCMI_REPO" "$TEMP_CLONE" -- --branch "$BRANCH"
 
-# Copy via helper container; chown to UID 1000 (vscode user). Submodules are
-# fetched inside the container by postCreateCommand (public https URLs - no
-# host-credential forwarding needed).
+# Copy via tar-over-stdin into a helper container; chown to UID 1000 (vscode user).
+# Streaming (not a host-path bind mount) is deliberate: bind sources must be
+# shared into the Docker VM's filesystem, and runtimes differ in what they share
+# (Docker Desktop shares /private incl. /var/folders; colima shares only /Users;
+# remote contexts share nothing) - an unshared source silently materializes as
+# an EMPTY dir in the VM and the copy "succeeds" with zero files. stdin works
+# everywhere.
 echo "[devcontainer] Copying into volume..."
-docker run --rm --platform "$DCP_ARCH" \
+tar -C "$TEMP_CLONE" -c . | docker run --rm --platform "$DCP_ARCH" -i \
   -v "$VOLUME_NAME:/workspace" \
-  -v "$TEMP_CLONE:/src:ro" \
-  alpine sh -c 'cp -a /src/. /workspace/ && chown -R 1000:1000 /workspace'
+  alpine sh -c 'tar -C /workspace -xpf - && chown -R 1000:1000 /workspace'
 
 echo "[devcontainer] Volume '$VOLUME_NAME' ready (repo: $VCMI_REPO, branch: $BRANCH)."
