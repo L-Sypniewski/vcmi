@@ -18,7 +18,8 @@
     "source=${localEnv:HOME}/.zshrc,target=/tmp/host-zshrc,type=bind,consistency=cached",
     "source=${localWorkspaceFolder}/.devcontainer/opencode-auth.json,target=/home/vscode/.local/share/opencode/auth.json,type=bind,consistency=cached",
     "source=${localWorkspaceFolder}/.devcontainer/opencode-mcp-auth.json,target=/home/vscode/.local/share/opencode/mcp-auth.json,type=bind,consistency=cached",
-    "source=ccache-volume,target=/mnt/ccache,type=volume"
+    "source=ccache-volume,target=/mnt/ccache,type=volume",
+    "source=h3-data-volume,target=/mnt/h3-data,type=volume"
   ],
   // hostRequirements = START-GATE / warning only (devcontainer spec). NOT a runtime cap.
   "hostRequirements": {
@@ -36,14 +37,16 @@
     "${localWorkspaceFolder}/.devcontainer/.env"
   ],
   // Fix ownership BEFORE installers: the opencode auth/mcp-auth binds make Docker create /home/vscode/.local/... as root-owned;
-  // the /mnt/ccache named volume must be vscode-owned for ccache to write it.
+  // the /mnt/ccache and /mnt/h3-data named volumes must be vscode-owned for their writers.
   // The C++ toolchain comes from apt (postCreateCommand, per docs/developers/Building_Linux.md); opencode stays curl-installed as a self-updating CLI.
-  "onCreateCommand": "sudo mkdir -p /home/vscode/.local/share/opencode /mnt/ccache && sudo chown -R vscode:vscode /home/vscode/.local /mnt/ccache && curl -fsSL https://opencode.ai/install | bash",
+  "onCreateCommand": "sudo mkdir -p /home/vscode/.local/share/opencode /mnt/ccache /mnt/h3-data && sudo chown -R vscode:vscode /home/vscode/.local /mnt/ccache /mnt/h3-data && curl -fsSL https://opencode.ai/install | bash",
   // Full vcmi build+test deps from docs/developers/Building_Linux.md (Ubuntu), then submodules (googletest for vcmitest,
   // vcmi-dependencies) and a warm configure of the test preset to validate the toolchain end-to-end (soft-fail: slow networks
   // shouldn't block container creation - rerun manually if skipped). ENABLE_MMAI=OFF: Ubuntu 24.04 apt has no onnxruntime
-  // (needs 24.10+ / Debian 13+) and MMAI is experimental - see README "NOT included".
-  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.local && sudo apt-get update && sudo apt-get install -y cmake g++ clang libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libsdl2-mixer-dev zlib1g-dev libavformat-dev libswscale-dev libboost-dev libboost-filesystem-dev libboost-program-options-dev libboost-date-time-dev libboost-iostreams-dev qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools qt6-svg-dev libtbb-dev libluajit-5.1-dev liblzma-dev libsqlite3-dev libminizip-dev libsquish-dev libfmt-dev ninja-build ccache ripgrep && git submodule update --init --recursive && { cmake --preset linux-gcc-test -DENABLE_MMAI=OFF || echo 'WARN: test-preset configure failed - run it manually in the container terminal'; } && cp /tmp/host-zshrc /home/vscode/.zshrc 2>/dev/null; echo 'set -a; . /etc/devcontainer/host.env 2>/dev/null; set +a' >> /home/vscode/.zshrc; echo 'set -a; . /etc/devcontainer/host.env 2>/dev/null; set +a' >> /home/vscode/.bashrc; echo 'alias opencode=\"opencode --auto\"' >> /home/vscode/.zshrc; echo 'alias opencode=\"opencode --auto\"' >> /home/vscode/.bashrc || true",
+  // (needs 24.10+ / Debian 13+) and MMAI is experimental - see README "NOT included". The unit tests resolve REAL H3 resources
+  // (DATA/LCDESC.TXT etc. - same as upstream CI), so the H3 test data is fetched onto the persistent h3-data volume and exposed
+  // at ~/.local/share/vcmi via symlink.
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.local && sudo apt-get update && sudo apt-get install -y cmake g++ clang libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libsdl2-mixer-dev zlib1g-dev libavformat-dev libswscale-dev libboost-dev libboost-filesystem-dev libboost-program-options-dev libboost-date-time-dev libboost-iostreams-dev qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools qt6-svg-dev libtbb-dev libluajit-5.1-dev liblzma-dev libsqlite3-dev libminizip-dev libsquish-dev libfmt-dev ninja-build ccache ripgrep p7zip-full && git submodule update --init --recursive && mkdir -p /home/vscode/.local/share && ln -sfn /mnt/h3-data/vcmi /home/vscode/.local/share/vcmi && { bash .devcontainer/fetch-h3-data.sh || echo 'WARN: H3 test data fetch failed - tests will fail on real resources; rerun .devcontainer/fetch-h3-data.sh'; } && { cmake --preset linux-gcc-test -DENABLE_MMAI=OFF || echo 'WARN: test-preset configure failed - run it manually in the container terminal'; } && cp /tmp/host-zshrc /home/vscode/.zshrc 2>/dev/null; echo 'set -a; . /etc/devcontainer/host.env 2>/dev/null; set +a' >> /home/vscode/.zshrc; echo 'set -a; . /etc/devcontainer/host.env 2>/dev/null; set +a' >> /home/vscode/.bashrc; echo 'alias opencode=\"opencode --auto\"' >> /home/vscode/.zshrc; echo 'alias opencode=\"opencode --auto\"' >> /home/vscode/.bashrc || true",
   // postStart shells do not source rc files, so exports are explicit where needed.
   "postStartCommand": "bash .devcontainer/set-git-identity.sh || true",
   "containerEnv": {

@@ -28,10 +28,11 @@ checkout.
 # 1. In VS Code: File → Open Folder → <this worktree>  (NOT the main checkout)
 # 2. Command Palette → "Dev Containers: Reopen in Container"
 #    (first start clones the branch into a named volume + apt-installs the
-#     full C++ toolchain - expect ~5-10 min; later starts are fast)
+#     full C++ toolchain + fetches H3 test data - expect ~5-10 min; later
+#     starts are fast)
 # 3. From the container terminal:
 cmake --preset linux-gcc-test -DENABLE_MMAI=OFF   # configure (run once; postCreate warm-configures it)
-cmake --build --preset linux-gcc-test             # build (warnings-as-errors ON)
+CMAKE_BUILD_PARALLEL_LEVEL=2 cmake --build --preset linux-gcc-test   # build; see memory note below
 cd out/build/linux-gcc-test/bin
 timeout 1800 ./vcmitest                          # full unit suite (ONE process; exit 124 = hang)
 timeout 300 ./vcmitest --gtest_filter='Suite*'   # filtered
@@ -43,6 +44,10 @@ it comes from `brew install coreutils`. On the macOS host build one suite -
 - deadlocks; exclude it there via
 `--gtest_filter=-Nullkiller2_Behaviors_GatherArmyBehavior.*`. Linux runs it
 fine in upstream CI.)
+
+**Build parallelism:** the 8 GB cap OOM-kills `cc1plus` at ninja's default
+`-j4` on the heaviest translation units - build with
+`CMAKE_BUILD_PARALLEL_LEVEL=2` (as above) inside this container.
 
 The container uses a **named Docker volume** (not a bind mount) seeded with a
 clone of the current branch from the fork (`L-Sypniewski/vcmi` - override with
@@ -88,6 +93,12 @@ restarts, so you don't re-clone on each start.
 | Store  | Path                        | Scope                                 | Reset                            |
 | ------ | --------------------------- | ------------------------------------- | -------------------------------- |
 | ccache | `/mnt/ccache` (`ccache-volume`) | host-global, all containers of this repo | `docker volume rm ccache-volume` |
+| H3 test data | `/mnt/h3-data/vcmi` (`h3-data-volume`), symlinked to `~/.local/share/vcmi` | host-global, all containers of this repo | `docker volume rm h3-data-volume` |
+
+The unit tests resolve REAL Heroes 3 resources (`DATA/LCDESC.TXT` etc.) - the
+same artifact upstream CI uses (`vcmi-mods/vcmi-test-data` heroes3.7z, see
+`.github/workflows/github.yml` "Prepare Heroes 3 data") is fetched once onto the
+persistent `h3-data` volume; rebuilds reuse it.
 
 ccache hits survive container rebuilds (`CCACHE_COMPILERCHECK=content` keeps
 the cache valid across toolchain upgrades). The ccache hit rate is what makes
