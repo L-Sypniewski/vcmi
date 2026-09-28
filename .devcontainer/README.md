@@ -21,6 +21,44 @@ checkout.
   provider credential) via a bind mount; MCP OAuth tokens (`mcp-auth.json`)
   ride along the same way (no project MCPs configured today - forwarded for
   when one lands).
+- **(optional) Claude Code token on host** - see "Claude Code setup" below; a
+  missing token only WARNs at container start (claude stays unauthenticated,
+  everything else works).
+
+## Claude Code setup (one-time)
+
+Claude Code authenticates from a token minted once on the host; from then on
+it is auto-forwarded as `CLAUDE_CODE_OAUTH_TOKEN` into every container start
+via the env staging pipeline. It reuses the SAME token file as the Alpio
+devcontainer - if you already minted one there, you are done.
+
+In a **host terminal** (not inside the container), once:
+
+```bash
+# 1. Mint the token (browser OAuth; prints a ~1-year token). The command
+#    saves nothing - copy the bare token string (first line, no prefixes).
+claude setup-token
+
+# 2. Store it - the file must contain ONLY the token, on a single line:
+mkdir -p ~/.config/alpio-devcontainer
+echo "<token>" > ~/.config/alpio-devcontainer/claude-token
+chmod 600 ~/.config/alpio-devcontainer/claude-token
+
+# 3. Secret-safe sanity check (never prints the token):
+test -s ~/.config/alpio-devcontainer/claude-token && echo "token file ok"
+```
+
+The env staging file is re-read on every container start, so a fresh token
+reaches even a re-attached container; only the FIRST provisioning of the
+claude-code feature needs a **Rebuild Container** (features bake into the
+image). The token supports model requests only. Regenerate roughly yearly.
+
+Verify in the **container terminal**:
+
+```bash
+printenv CLAUDE_CODE_OAUTH_TOKEN >/dev/null && echo "token forwarded"  # never prints the value
+claude --version
+```
 
 ## Quick start
 
@@ -73,7 +111,14 @@ restarts, so you don't re-clone on each start.
   `vcmi-dependencies`, innoextract, discord-presence) and warm-configures the
   `linux-gcc-test` preset as an end-to-end toolchain validation.
 - **gh CLI** (devcontainer feature) + **opencode** (curl-installed,
-  self-updating) - both authenticated via the host-forwarded credentials.
+  self-updating) + **claude** (official devcontainer feature) - all three
+  authenticated via the host-forwarded credentials.
+- **GLM-5.3 as the default model** - the repo's `.opencode/opencode.json`
+  pins `zai-coding-plan/glm-5.3` (reasoning effort `max`) with glm-5.3-flash
+  vision-capable, and preselects the `max` variant for the ship/build/plan
+  agents; `@ship <goal>` is the default agent (the pipeline entry point).
+  The config travels with the branch - `git pull` inside a persisted
+  workspace volume to pick up changes to it.
 - **ripgrep** - for agent code search.
 - **NOT included (deliberately)**: onnxruntime (Ubuntu 24.04 apt lacks it - the
   experimental MMAI combat AI stays off; see

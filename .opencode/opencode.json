@@ -1,5 +1,34 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "zai-coding-plan/glm-5.3",
+  // opencode's catalog doesn't know glm-5.3-flash is vision-capable on the z.ai
+  // coding-plan endpoint (the main glm-5.3 there is text-only), so the Read tool
+  // refuses image attachments for flash without this explicit override.
+  "provider": {
+    "zai-coding-plan": {
+      "models": {
+        "glm-5.3": {
+          // Wire-level default: reasoning_effort on every glm-5.3 request
+          // with no variant selected; a variant or agent pairing overrides it.
+          "options": { "reasoningEffort": "max" }
+        },
+        "glm-5.3-flash": {
+          "attachment": true
+        }
+      }
+    }
+  },
+  // `@ship <goal>` is the single autonomous entry point (AGENTS.md-level
+  // convention ported from Alpio): plain prompts run the full pipeline.
+  "default_agent": "ship",
+  // `variant` applies only when the session model matches the agent's own
+  // `model` key, so each agent pins both to preselect the max variant.
+  "agent": {
+    "ship": { "model": "zai-coding-plan/glm-5.3", "variant": "max" },
+    "build": { "model": "zai-coding-plan/glm-5.3", "variant": "max" },
+    "plan": { "model": "zai-coding-plan/glm-5.3", "variant": "max" }
+  },
+  "subagent_depth": 3,
   "instructions": [
     ".opencode/subagent-delegation.md",
     ".opencode/research-first.md"
