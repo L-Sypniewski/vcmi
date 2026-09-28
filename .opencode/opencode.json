@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    ".opencode/subagent-delegation.md",
+    ".opencode/research-first.md"
+  ],
+  "permission": {
+    "bash": {
+      "ls": "allow",
+      "ls *": "allow",
+      "wc": "allow",
+      "wc *": "allow",
+      "grep *": "allow",
+      "rg": "allow",
+      "rg *": "allow",
+      "echo": "allow",
+      "echo *": "allow",
+      "find": "allow",
+      "find *": "allow",
+      "head": "allow",
+      "head *": "allow",
+      "git commit": "allow",
+      "git push *-f *": "deny",
+      "gh run *": "deny"
+    }
+  }
+}

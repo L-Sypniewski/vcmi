@@ -283,6 +283,15 @@
             "inherits": "default-release"
         },
         {
+            "name": "macos-ninja-test",
+            "displayName": "Ninja with unit testing",
+            "description": "VCMI MacOS Ninja with unit tests",
+            "inherits": "macos-ninja-release",
+            "cacheVariables": {
+                "ENABLE_TEST": "ON"
+            }
+        },
+        {
             "name": "macos-conan-ninja-release",
             "displayName": "Ninja+Conan release",
             "description": "VCMI MacOS Ninja using Conan",
@@ -470,6 +479,11 @@
             "inherits": "default-release"
         },
         {
+            "name": "macos-ninja-test",
+            "configurePreset": "macos-ninja-test",
+            "inherits": "default-release"
+        },
+        {
             "name": "macos-conan-ninja-release",
             "configurePreset": "macos-conan-ninja-release",
             "inherits": "default-release"
@@ -603,6 +617,11 @@
         {
             "name": "macos-ninja-release",
             "configurePreset": "macos-ninja-release",
+            "inherits": "default-release"
+        },
+        {
+            "name": "macos-ninja-test",
+            "configurePreset": "macos-ninja-test",
             "inherits": "default-release"
         },
         {
