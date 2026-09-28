@@ -145,7 +145,11 @@ tools/sources to use, output format, boundaries, and report-back expectations.
      leave it; your COMMIT already landed (serialized), and `software-engineer`
      does one reconciling `git push` of HEAD after the fan-out converges, which
      publishes your commit. Report the commit SHA.
-4. **Verify your slice** if the task asks. **Default to a compile-check only**
+4. **Verify your slice** if the task asks. **Test preset** = `macos-ninja-test`
+   on the macOS host, `linux-gcc-test -DENABLE_MMAI=OFF` inside the devcontainer
+   (build there with `CMAKE_BUILD_PARALLEL_LEVEL=2` - default `-j4` OOM-kills
+   under the 8 GB cap); below the preset name stands for whichever applies.
+   **Default to a compile-check only**
    (`cmake --build --preset macos-ninja-test`, optionally scoped to the
    affected target via `--target <name>`) unless the task specifically calls
    for TDD red/green confirmation of a new test. When it does (TDD red-first:

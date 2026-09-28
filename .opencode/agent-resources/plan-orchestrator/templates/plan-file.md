@@ -113,7 +113,10 @@ Fixes #NNN[, #MMMM]
 ## Rules for the file
 
 - Cite `file:line` references from worker findings on every task.
-- Include a `**Verify**` step per phase. Default: a compile check
+- Include a `**Verify**` step per phase. **Test preset** = `macos-ninja-test`
+  on the macOS host, `linux-gcc-test -DENABLE_MMAI=OFF` inside the devcontainer
+  (build there with `CMAKE_BUILD_PARALLEL_LEVEL=2`); below the preset name
+  stands for whichever applies. Default: a compile check
   (`cmake --build --preset macos-ninja-test` - warnings-as-errors is ON via
   `ENABLE_STRICT_COMPILATION`) plus a `--gtest_filter`-scoped run of just this
   phase's own new/changed test suites (from `out/build/macos-ninja-test/bin/`:

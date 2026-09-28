@@ -257,27 +257,29 @@ instead - see step 4.)
 - Mixed scope or any doubt → full build + full test run (conservative
   default).
 
-The build+test commands (single canonical test-enabled preset; on this
-machine `macos-ninja-test` - use the platform's `*-test` preset equivalent
-elsewhere):
+The build+test commands. **Test preset** = `macos-ninja-test` on the macOS
+host; inside the devcontainer `linux-gcc-test -DENABLE_MMAI=OFF` (and build
+with `CMAKE_BUILD_PARALLEL_LEVEL=2` - ninja's default `-j4` OOM-kills
+`cc1plus` under the container's 8 GB cap). Below `<test-preset>` stands for
+whichever applies:
 
 ```bash
-cmake --preset macos-ninja-test                        # configure (once; skip if out/build/macos-ninja-test exists)
-cmake --build --preset macos-ninja-test                # full build, warnings-as-errors (ENABLE_STRICT_COMPILATION=ON)
-cd out/build/macos-ninja-test/bin && timeout 1800 ./vcmitest --gtest_filter='-Nullkiller2_Behaviors_GatherArmyBehavior.*'   # FULL suite, ONE process
+cmake --preset <test-preset>                              # configure (once; skip if the build dir exists)
+CMAKE_BUILD_PARALLEL_LEVEL=2 cmake --build --preset <test-preset>   # full build, warnings-as-errors (ENABLE_STRICT_COMPILATION=ON)
+cd out/build/<test-preset>/bin && timeout 1800 ./vcmitest   # FULL suite, ONE process (macOS host: add --gtest_filter='-Nullkiller2_Behaviors_GatherArmyBehavior.*' - see below)
 ```
 
 Three non-negotiables for the test run:
-- **Run from `out/build/macos-ninja-test/bin/`** - the resource loader resolves
+- **Run from `out/build/<test-preset>/bin/`** - the resource loader resolves
   `CONFIG/FILESYSTEM` relative to cwd; from anywhere else every test fails at
   global setup (this is the `WORKING_DIRECTORY` `test/CMakeLists.txt` sets for
   ctest).
-- **Always under `timeout`** (GNU coreutils, `/opt/homebrew/bin/timeout`) -
-  exit code 124 = hang = failure, never let the sweep block forever.
-- **Exclude `Nullkiller2_Behaviors_GatherArmyBehavior.*`** on this machine -
-  its `upgradesPikemenCarriedByGarrisonHero` test deadlocks (0% CPU, main
-  thread blocked; macOS build only - the other 936 tests pass). Revisit if the
-  hang is ever fixed upstream.
+- **Always under `timeout`** (GNU coreutils; in PATH on Linux, `/opt/homebrew/bin/timeout`
+  on the macOS host) - exit code 124 = hang = failure, never let the sweep block forever.
+- **Exclude `Nullkiller2_Behaviors_GatherArmyBehavior.*` on the macOS host only** -
+  its `upgradesPikemenCarriedByGarrisonHero` test deadlocks there (0% CPU, main
+  thread blocked; 936/936 pass with it excluded). Linux (devcontainer/upstream CI)
+  runs the full 937 green. Revisit if the hang is ever fixed upstream.
 
 Run the `vcmitest` BINARY directly - never per-test `ctest` (vcmi has slow
 global initialization; `gtest_discover_tests` registers each test as a

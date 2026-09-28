@@ -180,7 +180,10 @@ Run this in step 8 (plan + execute mode) or as the entire flow (execute-only mod
    mark the todo `completed` AND tick the plan
    file's checkbox (`- [ ]` → `- [x]`).
 4. **Per phase**: after all its tasks land, run the phase's `**Verify**` command via
-   `bash` (e.g. `cmake --build --preset macos-ninja-test`, or - from
+   `bash`. **Test preset** = `macos-ninja-test` on the macOS host,
+   `linux-gcc-test -DENABLE_MMAI=OFF` inside the devcontainer (build there with
+   `CMAKE_BUILD_PARALLEL_LEVEL=2`); below the preset name stands for whichever
+   applies. Examples: `cmake --build --preset macos-ninja-test`, or - from
    `out/build/macos-ninja-test/bin/` - `timeout 300 ./vcmitest
    --gtest_filter='SuiteName*'`).
    Use `bash` ONLY for verify commands - all other work is delegated to workers.

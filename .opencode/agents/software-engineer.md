@@ -163,8 +163,12 @@ every one** before implementing:
   Training data lags; re-check current behaviour.
 - **Each assumption** (file paths, API shapes, convention claims) - confirm
   against the live repo with `read` / `grep` / `glob`.
-- **The phase Verify command** - confirm it's the right one for the tree:
-  `cmake --build --preset macos-ninja-test` for anything that compiles
+- **The phase Verify command** - confirm it's the right one for the tree.
+  **Test preset** = `macos-ninja-test` on the macOS host, `linux-gcc-test
+  -DENABLE_MMAI=OFF` inside the devcontainer (build with
+  `CMAKE_BUILD_PARALLEL_LEVEL=2` there); below, `macos-ninja-test` stands for
+  whichever applies. A compile check is
+  `cmake --build --preset macos-ninja-test`
   (warnings-as-errors is ON via `ENABLE_STRICT_COMPILATION`), plus a
   `--gtest_filter`-scoped run of just the phase's own new/changed tests - NOT
   an unfiltered full `vcmitest` run. Test invocations run from
