@@ -129,10 +129,12 @@ gh repo clone "$VCMI_REPO" "$TEMP_CLONE" -- --branch "$BRANCH"
 # (Docker Desktop shares /private incl. /var/folders; colima shares only /Users;
 # remote contexts share nothing) - an unshared source silently materializes as
 # an EMPTY dir in the VM and the copy "succeeds" with zero files. stdin works
-# everywhere.
+# everywhere. COPYFILE_DISABLE stops macOS bsdtar from archiving AppleDouble
+# ._* metadata files (a ._pack-*.idx inside .git breaks every git command);
+# the extract-side find sweeps any stragglers anyway.
 echo "[devcontainer] Copying into volume..."
-tar -C "$TEMP_CLONE" -c . | docker run --rm --platform "$DCP_ARCH" -i \
+COPYFILE_DISABLE=1 tar -C "$TEMP_CLONE" -c --exclude '._*' --exclude '.DS_Store' . | docker run --rm --platform "$DCP_ARCH" -i \
   -v "$VOLUME_NAME:/workspace" \
-  alpine sh -c 'tar -C /workspace -xpf - && chown -R 1000:1000 /workspace'
+  alpine sh -c 'tar -C /workspace -xpf - && find /workspace -name "._*" -delete && chown -R 1000:1000 /workspace'
 
 echo "[devcontainer] Volume '$VOLUME_NAME' ready (repo: $VCMI_REPO, branch: $BRANCH)."
