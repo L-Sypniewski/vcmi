@@ -30,8 +30,8 @@ checkout.
 #    (first start clones the branch into a named volume + apt-installs the
 #     full C++ toolchain - expect ~5-10 min; later starts are fast)
 # 3. From the container terminal:
-cmake --preset linux-gcc-test          # configure (run once; postCreate warm-configures it)
-cmake --build --preset linux-gcc-test  # build (warnings-as-errors ON)
+cmake --preset linux-gcc-test -DENABLE_MMAI=OFF   # configure (run once; postCreate warm-configures it)
+cmake --build --preset linux-gcc-test             # build (warnings-as-errors ON)
 cd out/build/linux-gcc-test/bin
 timeout 1800 ./vcmitest                          # full unit suite (ONE process; exit 124 = hang)
 timeout 300 ./vcmitest --gtest_filter='Suite*'   # filtered
