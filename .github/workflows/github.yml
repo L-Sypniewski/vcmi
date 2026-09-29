@@ -1,12 +1,6 @@
 name: Daily Builds and Tests
 
 on:
-  push:
-    branches:
-      - beta
-      - master
-      - develop
-  pull_request:
   workflow_dispatch:
     inputs:
       enable_lto:
