@@ -3,8 +3,10 @@ set(vcmiservercommon_SRCS
 
 		battles/BattleActionProcessor.cpp
 		battles/BattleFlowProcessor.cpp
+		battles/BattleMirrorServer.cpp
 		battles/BattleProcessor.cpp
 		battles/BattleResultProcessor.cpp
+		battles/BattleTextViewRenderer.cpp
 
 		queries/BattleQueries.cpp
 		queries/CQuery.cpp
@@ -34,8 +36,10 @@ set(vcmiservercommon_HEADERS
 
 		battles/BattleActionProcessor.h
 		battles/BattleFlowProcessor.h
+		battles/BattleMirrorServer.h
 		battles/BattleProcessor.h
 		battles/BattleResultProcessor.h
+		battles/BattleTextViewRenderer.h
 
 		queries/BattleQueries.h
 		queries/CQuery.h
