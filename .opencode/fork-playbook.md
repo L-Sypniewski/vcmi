@@ -16,7 +16,10 @@ this machine (Apple Silicon macOS, Xcode CLT, colima). Companion to
   to it directly; sync via `git push origin upstream/develop:develop`.
 - Feature branches (`ship/*` or `lukasz-*`) live on the fork and PR into fork
   `develop`. **No PRs/issues/comments on upstream** (repo policy + owner
-  preference; upstream `AGENTS.md` GitHub Contribution Policy).
+  preference; upstream `AGENTS.md` GitHub Contribution Policy). History: the
+  battle-telnet-mirror work was once PRed upstream (#7924) and closed — the
+  fork-only policy is deliberate; do not resubmit upstream. The open fork PR
+  is `L-Sypniewski/vcmi#1` (`ship/battle-telnet-mirror` → fork `develop`).
 - Main checkout `/Users/lukasz/Documents/developer/vcmi` stays on
   `lukasz-experiment` (this agent/infra branch: `.opencode/`, `.devcontainer/`).
   Feature work goes in sibling worktrees `../vcmi-<branch-slug>` — this matches
@@ -65,12 +68,33 @@ Mechanics (from `.devcontainer/devcontainer.json` on `lukasz-experiment`):
 with `DATA/LCDESC not found` because the H3 symlink is per-user):
 
 ```sh
-devcontainer exec --workspace-folder <worktree-abs-path> bash    # interactive
+# interactive — either of:
+devcontainer exec --workspace-folder <worktree-abs-path> bash
+docker exec -it -u vscode -w /workspace <container> bash
+# container names are random (e.g. "infallible_hamilton") — find with docker ps;
+# the image is vsc-vcmi-<slug>-...-features
+# VS Code also works: open the WORKTREE folder (not the main checkout) →
+# "Reopen in Container"; after colima stop/start, devcontainer up reattaches (~1 min)
+
 devcontainer exec --workspace-folder <worktree-abs-path> bash -lc \
   'cmake --build --preset linux-gcc-test'                        # build
 devcontainer exec --workspace-folder <worktree-abs-path> bash -lc \
   'cd out/build/linux-gcc-test/bin && ./vcmitest'                # full suite
+devcontainer exec --workspace-folder <worktree-abs-path> bash -lc \
+  'cd out/build/linux-gcc-test/bin && ./vcmitest --gtest_filter="BattleMirror*"'
+                                                                # targeted suites
 ```
+
+**Edit loop**: the container workspace is its own clone — VS Code remote
+edits land directly in it; host-side edits must relay through the fork
+(host `git push` → in-container `git pull`). In-container commits and pushes
+work (origin = fork, gh token forwarded via the env-file, identity set by
+`set-git-identity.sh`).
+
+**GUI does not run in the container** — no display, and X11 forwarding would
+need XQuartz installed on the host (defeats the no-host-pollution rule). Use
+the host-native lane (§4) whenever a change must be *played*, the container
+for build + tests.
 
 Baselines and known issues (as of the `5881a6f93` merge, 2026-10-19):
 
@@ -108,11 +132,17 @@ conan install . --output-folder=conan-macos --build=never \
 cmake -S . -B out/build/macos-dev -G Ninja \
   --toolchain conan-macos/conan_toolchain.cmake -D CMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build out/build/macos-dev -- -j$(sysctl -n hw.ncpu)   # first ~15-30 min
+# Host build keeps MMAI ENABLED (onnxruntime resolves from the Conan prebuilts;
+# only the container needs -DENABLE_MMAI=OFF). Smoke check without GUI:
+HOME=/tmp/vcmi-smoke out/build/macos-dev/bin/vcmiserver --help && rm -rf /tmp/vcmi-smoke
 ```
 
 **Play, isolated from the official installation** (VCMI hardcodes user data to
 `$HOME/Library/Application Support/vcmi` — `lib/VCMIDirs.cpp` `VCMIDirsOSX`;
-never launch a dev build without the `HOME` override):
+never launch a dev build without the `HOME` override). `bin/` is
+self-contained: the build stages `config/` and `Mods/` next to the binaries,
+and VCMI's development mode (`lib/VCMIDirs.cpp` `developmentMode()`) resolves
+game data relative to the CWD when both are present:
 
 ```sh
 cd ../vcmi-<slug>/out/build/macos-dev/bin
@@ -195,3 +225,8 @@ pre-dates this workflow).
 - Submodule pins move during merges between branches — a dirty `dependencies`
   in the main checkout after switching branches is expected;
   `git submodule update dependencies` restores it.
+- **The fork docs exist on two branches and must stay identical**: update
+  `.opencode/fork-workflow.md` + `.opencode/fork-playbook.md` (and the
+  `AGENTS.md` fork section) on `lukasz-experiment` first, commit, then copy
+  into the PR worktree and commit there — only ever commit these doc paths,
+  never build output or `.devcontainer/`.
