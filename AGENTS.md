@@ -1,5 +1,14 @@
 # Repository Guidelines
 
+## Fork operations (L-Sypniewski/vcmi)
+
+This checkout is a fork. All pushes and PRs target the fork (`origin`),
+never `upstream` (vcmi/vcmi — fetch-only; also no PRs/issues/comments there).
+Feature work uses sibling worktrees `../vcmi-<slug>`; the devcontainer and
+host-native build lanes, test baselines, and the full host cleanup map are in
+[`.opencode/fork-playbook.md`](.opencode/fork-playbook.md) (rules summary:
+[`.opencode/fork-workflow.md`](.opencode/fork-workflow.md)).
+
 ## Important Patterns and Conventions
 
 ### C++ style

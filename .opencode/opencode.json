@@ -31,7 +31,8 @@
   "subagent_depth": 3,
   "instructions": [
     ".opencode/subagent-delegation.md",
-    ".opencode/research-first.md"
+    ".opencode/research-first.md",
+    ".opencode/fork-workflow.md"
   ],
   "permission": {
     "bash": {
