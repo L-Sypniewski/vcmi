@@ -130,32 +130,58 @@ relaunch. Incremental rebuilds are minutes.
 
 ## 5. Host cleanup map
 
-Everything the fork workflow adds lives in five places (plus one git pin):
+Everything the fork workflow adds lives in **five self-contained locations**
+(plus one reversible side-effect in the main checkout). Full cleanup when done
+experimenting reclaims ~10–15 GB:
+
+| # | Location | Contents | Approx. size |
+| --- | --- | --- | --- |
+| 1 | Docker (inside colima VM) | dev container, `vcmi-vcmi-<slug>` workspace volume, `ccache-volume`, `h3-data-volume` (1.2 GB), `-features` images | ~5+ GB |
+| 2 | Worktree `../vcmi-<slug>` | source clone, `out/build/*`, `conan-macos/`, untracked `.devcontainer/` copies | several GB |
+| 3 | `~/.local/vcmi-buildenv/` | Python venv (conan, cmake, ninja) | ~0.5 GB |
+| 4 | `~/.conan2/` | Conan dependency binaries cache | ~0.5–2 GB |
+| 5 | `~/vcmi-scratch/` | isolated user data (settings, saves, mods) for playing | grows with use |
 
 ```sh
-# container side (~5+ GB in the colima VM)
-docker rm -f <container>
+# 1. container side
+docker rm -f <container>                       # e.g. infallible_hamilton
 docker volume rm vcmi-vcmi-<slug> ccache-volume h3-data-volume
 docker image rm vsc-vcmi-<slug>-*-features dev_container_feature_content_temp
-colima stop && colima start --cpu 2 --memory 2   # restore VM size (or leave)
+colima stop
+colima start --cpu 2 --memory 2               # restore original VM size (or leave at 4/8)
 
-# worktree (source + out/ + conan-macos/)
+# 2. worktree — removes the build output and the borrowed .devcontainer copies
 git -C ~/Documents/developer/vcmi worktree remove --force ../vcmi-<slug>
 
-# host user-space (~2–4 GB)
+# 3–5. host user-space bits
 rm -rf ~/.local/vcmi-buildenv ~/.conan2 ~/vcmi-scratch
 
-# restore main-checkout submodule pin after merge work there
+# side-effect in the main checkout: after merge work, the `dependencies`
+# submodule pin sits at the other branch's commit (`git status` shows
+# "M dependencies") — restore with:
 git -C ~/Documents/developer/vcmi submodule update dependencies
 
-# optional: local branch
+# optional: drop the local branch — the work itself stays on the fork remote
 git -C ~/Documents/developer/vcmi branch -D <branch>
 ```
 
-Never touched: `/opt/homebrew`, `/usr/local`, `/Applications` (official
-`VCMI.app` and its `~/Library/Application Support/vcmi` data), Xcode CLT,
-Python, colima binary itself. colima was pre-existing — stop/resize only; do
-not `colima delete` if the VM is used for anything else.
+Cautions:
+
+- `colima delete -f` is the bigger hammer — it wipes the whole VM including
+  base images. Acceptable only if the VM is dedicated to this workflow (it
+  was: nothing but `hello-world`/`alpine` ever ran in it); the per-item
+  removal above is the precise path.
+- **Don't clean up mid-experiment**: the Conan cache, the ccache volume, and
+  the H3 data are exactly what turn hour-long cold builds and bring-ups into
+  minutes.
+- The result is a host indistinguishable from before — apart from git history
+  on the fork, which is the point.
+
+Never touched by this workflow (verify with `df`/`brew list` before/after if
+in doubt): `/opt/homebrew`, `/usr/local`, `/Applications` (the official
+`VCMI.app` and its data at `~/Library/Application Support/vcmi`), Xcode CLT,
+system Python, and the colima installation itself (stop/resize only — it
+pre-dates this workflow).
 
 ## 6. Agent etiquette
 
