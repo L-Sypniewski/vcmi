@@ -56,7 +56,6 @@ public:
 	struct CommanderLevelInfo
 	{
 		std::vector<ui32> skills;
-		std::function<void(ui32)> callback;
 	};
 	struct StackDismissInfo
 	{
@@ -448,7 +447,7 @@ CStackWindow::ButtonsSection::ButtonsSection(CStackWindow * owner, int yOffset)
 		stackWindow->switchButtons[stackWindow->activeTab]->disable();
 	}
 
-	exit = std::make_shared<CButton>(Point(382, 5), AnimationPath::builtin("hsbtns.def"), LIBRARY->generaltexth->zelp[447], [this](){ stackWindow->submitSelection(); }, EShortcut::GLOBAL_RETURN);
+	exit = std::make_shared<CButton>(Point(382, 5), AnimationPath::builtin("hsbtns.def"), LIBRARY->generaltexth->zelp[447], [this](){ stackWindow->submitSelection(); }, stackWindow->closeShortcut);
 }
 
 CStackWindow::CommanderMainSection::CommanderMainSection(CStackWindow * owner, int yOffset)
@@ -704,10 +703,18 @@ CStackWindow::MainSection::MainSection(CStackWindow * owner, int yOffset, bool s
 			auto area = std::make_shared<LRClickableAreaWTextComp>(Rect(pos.x, pos.y, 44, 44), ComponentType::EXPERIENCE);
 			expArea = area;
 			MetaString expText;
-			expText.appendTextID("core.genrltxt.2");
-			expText.replaceNumber(commander->getExpRank());
-			expText.replaceNumber(LIBRARY->heroh->reqExp(commander->getExpRank() + 1));
-			expText.replaceNumber(commander->getAverageExperience());
+			if(commander->level >= commander->cb->getHeroLevelLimit())
+			{
+				expText.appendTextID("core.genrltxt.1"); //can gain no more XP
+				expText.replaceRawString(commander->name);
+			}
+			else
+			{
+				expText.appendTextID("core.genrltxt.2");
+				expText.replaceNumber(commander->level);
+				expText.replaceNumber(LIBRARY->heroh->reqExp(commander->level + 1));
+				expText.replaceNumber(commander->getAverageExperience());
+			}
 
 			area->text = expText.toString(&GAME->translator());
 			area->component.value = commander->getExpRank();
@@ -788,9 +795,10 @@ void CStackWindow::MainSection::addStatLabel(EStat index, int64_t value)
 	addStatLabel(index, value, value);
 }
 
-CStackWindow::CStackWindow(const CStack * stack, bool popup)
+CStackWindow::CStackWindow(const CStack * stack, bool popup, EShortcut closeShortcut)
 	: CWindowObject(BORDERED | (popup ? RCLICK_POPUP : 0)),
-	info(std::make_unique<UnitView>())
+	info(std::make_unique<UnitView>()),
+	closeShortcut(closeShortcut)
 {
 	info->stack = stack;
 	info->stackNode = stack->base;
@@ -855,20 +863,23 @@ CStackWindow::CStackWindow(const CCommanderInstance * commander, bool popup)
 	init();
 }
 
-CStackWindow::CStackWindow(const CCommanderInstance * commander, std::vector<ui32> &skills, std::function<void(ui32)> callback)
+CStackWindow::CStackWindow(CPlayerInterface * askedInterface, const CCommanderInstance * commander, const std::vector<ui32> & skills, bool moreLevels, QuestionID question)
 	: CWindowObject(BORDERED),
 	info(std::make_unique<UnitView>())
 {
-	initCommanderLevelUpData(commander, skills, callback);
+	initCommanderLevelUpData(askedInterface, commander, skills, moreLevels, question);
 	init();
 }
 
 CStackWindow::~CStackWindow() = default;
 
-void CStackWindow::initCommanderLevelUpData(const CCommanderInstance * commander, const std::vector<ui32> & skills, const std::function<void(ui32)> & callback)
+void CStackWindow::initCommanderLevelUpData(CPlayerInterface * askedInterface, const CCommanderInstance * commander, const std::vector<ui32> & skills, bool moreLevels, QuestionID question)
 {
-	GAME->interface()->showingDialog->setBusy();
+	owner = askedInterface;
+	moreLevelsFollow = moreLevels;
+	owner->showingDialog->setBusy();
 	selectionSubmitted = false;
+	questionID = question;
 
 	info->stackNode = commander;
 	info->creature = commander->getCreature();
@@ -876,45 +887,7 @@ void CStackWindow::initCommanderLevelUpData(const CCommanderInstance * commander
 	info->creatureCount = 1;
 	info->levelupInfo = std::make_optional(UnitView::CommanderLevelInfo());
 	info->levelupInfo->skills = skills;
-	info->levelupInfo->callback = callback;
 	info->owner = dynamic_cast<const CGHeroInstance *> (commander->getArmy());
-}
-
-void CStackWindow::updateCommanderLevelUpData(const CCommanderInstance * commander, std::vector<ui32> & skills, const std::function<void(ui32)> & callback)
-{
-	OBJECT_CONSTRUCTION;
-
-	initCommanderLevelUpData(commander, skills, callback);
-
-	if(!backgroundTexture)
-	{
-		init();
-		return;
-	}
-
-	fakeNode.reset();
-	activeBonuses.clear();
-
-	switchButtons.clear();
-	mainSection.reset();
-	activeSpellsSection.reset();
-	commanderMainSection.reset();
-	commanderBonusesSection.reset();
-	bonusesSection.reset();
-	buttonsSection.reset();
-	commanderTab.reset();
-
-	selectedIcon = nullptr;
-	selectedSkill = skills.empty() ? -1 : skills.front();
-	activeTab = 0;
-
-	pos = Rect();
-	initBonusesList();
-	initSections();
-	backgroundTexture->pos = pos;
-
-	setRedrawParent(true);
-	redraw();
 }
 
 bool CStackWindow::isCommanderLevelUpDialog() const
@@ -924,22 +897,30 @@ bool CStackWindow::isCommanderLevelUpDialog() const
 
 void CStackWindow::submitSelection()
 {
-	if(!selectionSubmitted)
+    if(!selectionSubmitted && questionID.hasValue())
 	{
 		if(info->levelupInfo)
 		{
 			if(info->levelupInfo->skills.empty())
-				info->levelupInfo->callback(0);
+				answer(0);
 			else
-				info->levelupInfo->callback(vstd::find_pos(info->levelupInfo->skills, selectedSkill));
+				answer(vstd::find_pos(info->levelupInfo->skills, selectedSkill));
 		}
 
 		selectionSubmitted = true;
-		GAME->interface()->showingDialog->setFree();
+		owner->showingDialog->setFree();
 	}
 
-	if(closeOnSelection)
+	// Before a further level the window stays open, so that the chain reuses it instead of flickering.
+	// The last one closes at once: a window pushed above it, e.g. a conquered garrison, would block it
+	if(!questionID.hasValue() || !moreLevelsFollow)
 		close();
+}
+
+void CStackWindow::answer(ui32 selection)
+{
+	if(questionID.hasValue())
+		owner->cb->selectionMade(selection, questionID);
 }
 
 void CStackWindow::close()
@@ -1266,8 +1247,4 @@ void CStackWindow::removeStackArtifact(ArtifactPosition pos)
 		stackArtifact.reset();
 		redraw();
 	}
-}
-void CStackWindow::setCloseOnSelection(bool value)
-{
-	closeOnSelection = value;
 }

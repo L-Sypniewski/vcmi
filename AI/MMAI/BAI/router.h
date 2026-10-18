@@ -10,8 +10,9 @@
 
 #pragma once
 
-#include "StdInc.h"
+#include "AI/MMAI/common.h" // IWYU pragma: keep
 
+#include "AI/MMAI/schema/base.h"
 #include "battle/AutocombatPreferences.h"
 #include "battle/CPlayerBattleCallback.h"
 #include "callback/CBattleGameInterface.h"
@@ -46,7 +47,7 @@ public:
 	void activeStack(const BattleID & bid, const CStack * stack) override; //called when it's turn of that stack
 	void battleAttack(const BattleID & bid, const BattleAttack * ba) override;
 	void battleCatapultAttacked(const BattleID & bid, const CatapultAttack & ca) override;
-	void battleEnd(const BattleID & bid, const BattleResult * br, QueryID queryID) override;
+	void battleEnd(const BattleID & bid, const BattleResult * br, QuestionID questionID) override;
 	void battleGateStateChanged(const BattleID & bid, EGateState state) override;
 	void battleLogMessage(const BattleID & bid, const std::vector<MetaString> & lines) override;
 	void battleNewRound(const BattleID & bid) override;

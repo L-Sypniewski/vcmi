@@ -14,16 +14,16 @@
 #include "TurnTimerHandler.h"
 #include "ServerNetPackVisitors.h"
 #include "ServerSpellCastEnvironment.h"
-#include "TurnStartVisitScheduler.h"
 #include "battles/BattleProcessor.h"
 #include "processors/HeroPoolProcessor.h"
 #include "processors/NewTurnProcessor.h"
 #include "processors/PlayerMessageProcessor.h"
 #include "processors/TurnOrderProcessor.h"
-#include "queries/QueriesProcessor.h"
-#include "queries/LuaScriptQuery.h"
-#include "queries/MapQueries.h"
-#include "queries/VisitQueries.h"
+#include "activities/ActivityProcessor.h"
+#include "activities/LuaScriptActivity.h"
+#include "activities/MapActivities.h"
+#include "activities/SpellActivities.h"
+#include "activities/VisitActivities.h"
 
 #include "../lib/CConfigHandler.h"
 #include "../lib/CCreatureHandler.h"
@@ -57,6 +57,7 @@
 
 #include <vcmi/scripting/MapEventDispatcher.h>
 #include "../lib/gameState/QuestInfo.h"
+#include "../lib/gameState/SaveMetadata.h"
 #include "../lib/gameState/UpgradeInfo.h"
 
 #include "../lib/mapping/CMap.h"
@@ -84,8 +85,10 @@
 
 #include "../lib/rmg/CMapGenOptions.h"
 
-#include "../lib/serializer/CSaveFile.h"
+#include "../lib/serializer/CLegacyLoadFile.h"
 #include "../lib/serializer/CLoadFile.h"
+#include "../lib/serializer/CMemorySerializer.h"
+#include "../lib/serializer/CSaveFile.h"
 
 #include "../lib/spells/CSpell.h"
 
@@ -132,21 +135,14 @@ IGameServer & CGameHandler::gameServer() const
 	return server;
 }
 
-void CGameHandler::levelUpHero(const CGHeroInstance * hero, SecondarySkill skill)
+void CGameHandler::applyHeroLevelUp(const CGHeroInstance * hero, SecondarySkill skill)
 {
 	changeSecSkill(hero, skill, 1, ChangeValueMode::RELATIVE);
-	expGiven(hero);
 }
 
-void CGameHandler::levelUpHero(const CGHeroInstance * hero)
+HeroLevelUp CGameHandler::rollHeroLevelUp(const CGHeroInstance * hero)
 {
-	// required exp for at least 1 lvl-up hasn't been reached
-	if (!hero->gainsLevel())
-	{
-		if (hero->getCommander() && hero->getCommander()->gainsLevel())
-			levelUpCommander(hero->getCommander());
-		return;
-	}
+	assert(hero->gainsLevel());
 
 	// give primary skill
 	logGlobal->trace("%s got level %d", hero->getNameTextID(), hero->level);
@@ -164,24 +160,25 @@ void CGameHandler::levelUpHero(const CGHeroInstance * hero)
 	hlu.heroId = hero->id;
 	hlu.primskill = primarySkill;
 	hlu.skills = randomizer->rollSecondarySkills(hero);
+	// level is raised only once the pack is applied
+	hlu.moreLevelsFollow = hero->level + 2 <= gameState().getHeroLevelLimit() && hero->exp >= LIBRARY->heroh->reqExp(hero->level + 2);
 
-	if (!hero->getOwner().isValidPlayer())
+	return hlu;
+}
+
+void CGameHandler::levelUpHeroAutomatically(const CGHeroInstance * hero)
+{
+	while(hero->canGainExperience() && hero->gainsLevel())
 	{
+		auto hlu = rollHeroLevelUp(hero);
 		sendAndApply(hlu);
-		if(hlu.skills.empty())
-			levelUpHero(hero);
-		else
-			levelUpHero(hero, hlu.skills.front());
-	}
-	else
-	{
-		auto levelUpQuery = std::make_shared<CHeroLevelUpDialogQuery>(this, hlu, hero);
-		queries->addQuery(levelUpQuery);
-		//level up will be called on query reply
+
+		if(!hlu.skills.empty())
+			applyHeroLevelUp(hero, hlu.skills.front());
 	}
 }
 
-void CGameHandler::levelUpCommander (const CCommanderInstance * c, int skill)
+void CGameHandler::applyCommanderLevelUp(const CCommanderInstance * c, int skill)
 {
 	SetCommanderProperty scp;
 
@@ -194,140 +191,70 @@ void CGameHandler::levelUpCommander (const CCommanderInstance * c, int skill)
 		return;
 	}
 
-	scp.accumulatedBonus.parameters = 0;
-	scp.accumulatedBonus.duration = BonusDuration::PERMANENT;
-	scp.accumulatedBonus.turnsRemain = 0;
-	scp.accumulatedBonus.source = BonusSource::COMMANDER;
-	scp.accumulatedBonus.valType = BonusValueType::BASE_NUMBER;
+	scp.which = skill <= ECommander::SPELL_POWER ? SetCommanderProperty::BONUS : SetCommanderProperty::SPECIAL_SKILL;
+	scp.additionalInfo = skill;
+	for(const auto & bonus : c->getSkillBonuses(skill))
+	{
+		scp.accumulatedBonus = bonus;
+		sendAndApply(scp);
+	}
+
 	if (skill <= ECommander::SPELL_POWER)
 	{
-		scp.which = SetCommanderProperty::BONUS;
-
-		auto difference = [](std::vector< std::vector <ui8> > skillLevels, std::vector <ui8> secondarySkills, int skillToTest)->int
-		{
-			int s = std::min (skillToTest, static_cast<int>(ECommander::SPELL_POWER)); //spell power level controls also casts and resistance
-			return skillLevels.at(skillToTest).at(secondarySkills.at(s)) - (secondarySkills.at(s) ? skillLevels.at(skillToTest).at(secondarySkills.at(s)-1) : 0);
-		};
-
-		switch (skill)
-		{
-			case ECommander::ATTACK:
-				scp.accumulatedBonus.type = BonusType::PRIMARY_SKILL;
-				scp.accumulatedBonus.subtype = BonusSubtypeID(PrimarySkill::ATTACK);
-				break;
-			case ECommander::DEFENSE:
-				scp.accumulatedBonus.type = BonusType::PRIMARY_SKILL;
-				scp.accumulatedBonus.subtype = BonusSubtypeID(PrimarySkill::DEFENSE);
-				break;
-			case ECommander::HEALTH:
-				scp.accumulatedBonus.type = BonusType::STACK_HEALTH;
-				scp.accumulatedBonus.valType = BonusValueType::PERCENT_TO_ALL; //TODO: check how it accumulates in original WoG with artifacts such as vial of life blood, elixir of life etc.
-				break;
-			case ECommander::DAMAGE:
-				scp.accumulatedBonus.type = BonusType::CREATURE_DAMAGE;
-				scp.accumulatedBonus.subtype = BonusCustomSubtype::creatureDamageBoth;
-				scp.accumulatedBonus.valType = BonusValueType::PERCENT_TO_ALL;
-				break;
-			case ECommander::SPEED:
-				scp.accumulatedBonus.type = BonusType::STACKS_SPEED;
-				break;
-			case ECommander::SPELL_POWER:
-				scp.accumulatedBonus.type = BonusType::SPELL_DAMAGE_REDUCTION;
-				scp.accumulatedBonus.subtype = BonusSubtypeID(SpellSchool::ANY);
-				scp.accumulatedBonus.val = difference (LIBRARY->creh->skillLevels, c->secondarySkills, ECommander::RESISTANCE);
-				sendAndApply(scp); //additional pack
-				scp.accumulatedBonus.type = BonusType::CREATURE_SPELL_POWER;
-				scp.accumulatedBonus.val = difference (LIBRARY->creh->skillLevels, c->secondarySkills, ECommander::SPELL_POWER) * 100; //like hero with spellpower = ability level
-				sendAndApply(scp); //additional pack
-				scp.accumulatedBonus.type = BonusType::CASTS;
-				scp.accumulatedBonus.val = difference (LIBRARY->creh->skillLevels, c->secondarySkills, ECommander::CASTS);
-				sendAndApply(scp); //additional pack
-				scp.accumulatedBonus.type = BonusType::CREATURE_ENCHANT_POWER; //send normally
-				break;
-		}
-
-		scp.accumulatedBonus.val = difference (LIBRARY->creh->skillLevels, c->secondarySkills, skill);
-		sendAndApply(scp);
-
 		scp.which = SetCommanderProperty::SECONDARY_SKILL;
-		scp.additionalInfo = skill;
 		scp.amount = c->secondarySkills.at(skill) + 1;
 		sendAndApply(scp);
 	}
-	else if (skill >= 100)
-	{
-		for(const auto & bonus : LIBRARY->creh->skillRequirements.at(skill - 100).first)
-		{
-			scp.which = SetCommanderProperty::SPECIAL_SKILL;
-			scp.accumulatedBonus = *bonus;
-			scp.additionalInfo = skill; //unnormalized
-			sendAndApply(scp);
-		}
-	}
-	expGiven(hero);
 }
 
-void CGameHandler::levelUpCommander(const CCommanderInstance * c)
+CommanderLevelUp CGameHandler::rollCommanderLevelUp(const CCommanderInstance * c)
 {
-	if (!c->gainsLevel())
-	{
-		return;
-	}
 	CommanderLevelUp clu;
 
 	const auto * hero = dynamic_cast<const CGHeroInstance *>(c->getArmy());
-	if(hero)
-	{
-		clu.heroId = hero->id;
-		clu.player = hero->tempOwner;
-	}
-	else
-	{
-		complain ("Commander is not led by hero!");
-		return;
-	}
+	if(!hero)
+		throw std::runtime_error("Commander is not led by hero!");
 
-	//picking sec. skills for choice
+	clu.heroId = hero->id;
+	clu.player = hero->tempOwner;
+	// level is raised only once the pack is applied
+	clu.moreLevelsFollow = c->level + 2 <= gameState().getHeroLevelLimit() && c->getTotalExperience() >= LIBRARY->heroh->reqExp(c->level + 2);
 
-	for (int i = 0; i <= ECommander::SPELL_POWER; ++i)
+	for(int skill : c->getLevelUpSkillChoices())
+		clu.skills.push_back(skill);
+
+	return clu;
+}
+
+void CGameHandler::levelUpCommanderAutomatically(const CCommanderInstance * c)
+{
+	while(c->gainsLevel())
 	{
-		if (c->secondarySkills.at(i) < ECommander::MAX_SKILL_LEVEL)
-			clu.skills.push_back(i);
-	}
-	int i = 100;
-	for (const auto & specialSkill : LIBRARY->creh->skillRequirements)
-	{
-		if (c->secondarySkills.at(specialSkill.second.first) >= ECommander::MAX_SKILL_LEVEL - 1
-			&&  c->secondarySkills.at(specialSkill.second.second) >= ECommander::MAX_SKILL_LEVEL - 1
-			&&  !vstd::contains (c->specialSkills, i))
-			clu.skills.push_back (i);
-		++i;
-	}
-	if (!hero->getOwner().isValidPlayer()) //choose skill automatically
-	{
+		auto clu = rollCommanderLevelUp(c);
+
 		sendAndApply(clu);
-		if(clu.skills.empty())
-			levelUpCommander(c);
-		else
-			levelUpCommander(c, *RandomGeneratorUtil::nextItem(clu.skills, getRandomGenerator()));
-	}
-	else
-	{
-		auto commanderLevelUp = std::make_shared<CCommanderLevelUpDialogQuery>(this, clu, hero);
-		queries->addQuery(commanderLevelUp);
+
+		if(!clu.skills.empty())
+			applyCommanderLevelUp(c, *RandomGeneratorUtil::nextItem(clu.skills, getRandomGenerator()));
 	}
 }
 
 void CGameHandler::expGiven(const CGHeroInstance *hero)
 {
-	// pending level-up dialog continues the chain once answered
-	if (queries->findQuery<CHeroLevelUpDialogQuery>([hero](const CHeroLevelUpDialogQuery & query) { return query.hero == hero; }))
+	// An owner-less hero has nobody to ask and is never inside a visit, so no activity is
+	// created for him - the processor has no stack to put one on
+	if(!hero->getOwner().isValidPlayer())
+	{
+		levelUpHeroAutomatically(hero);
+		if(const auto * commander = hero->getCommander())
+			levelUpCommanderAutomatically(commander);
 		return;
+	}
 
-	if (hero->gainsLevel())
-		levelUpHero(hero);
-	else if (hero->getCommander() && hero->getCommander()->gainsLevel())
-		levelUpCommander(hero->getCommander());
+	// A single routine asks about every gained level, and about the commander afterwards.
+	// Added even when nothing levels: whoever granted the experience is told when the
+	// routine finishes, and must be told in that case too.
+	activities->addActivity(std::make_shared<LevelUpRoutine>(this, hero));
 }
 
 void CGameHandler::giveStackExperience(const CArmedInstance * army, TExpType val)
@@ -349,21 +276,13 @@ void CGameHandler::giveExperience(const CGHeroInstance * hero, TExpType amountTo
 	expGiven(hero);
 }
 
-TExpType CGameHandler::getHeroExperienceLimit() const
-{
-	if (gameState().getMap().levelLimit != 0)
-		return LIBRARY->heroh->reqExp(gameState().getMap().levelLimit);
-
-	return LIBRARY->heroh->reqExp(LIBRARY->heroh->maxSupportedLevel());
-}
-
 void CGameHandler::giveExperienceWithoutLevelUp(const CGHeroInstance * hero, TExpType amountToGain)
 {
-	TExpType maxExp = getHeroExperienceLimit();
+	TExpType maxExp = LIBRARY->heroh->reqExp(gameState().getHeroLevelLimit());
 	TExpType currHeroExp = hero->exp;
 
 	TExpType canGainHeroExp = 0;
-	if (maxExp > currHeroExp)
+	if (maxExp > currHeroExp && hero->canGainExperience())
 		canGainHeroExp = maxExp - currHeroExp;
 
 	TExpType actualHeroExperience = 0;
@@ -393,7 +312,7 @@ void CGameHandler::giveExperienceWithoutLevelUp(const CGHeroInstance * hero, TEx
 	{
 		TExpType canGainCommanderExp = 0;
 		TExpType currCommanderExp = hero->getCommander()->getTotalExperience();
-		if (maxExp > currHeroExp)
+		if (maxExp > currCommanderExp)
 			canGainCommanderExp = maxExp - currCommanderExp;
 
 		TExpType actualCommanderExperience = amountToGain > canGainCommanderExp ? canGainCommanderExp : amountToGain;
@@ -442,7 +361,7 @@ void CGameHandler::changeSecSkill(const CGHeroInstance * hero, SecondarySkill wh
 
 	// one hero level per mastery level gained
 	const int masteryGained = hero->getSecSkillLevel(which) - masteryBefore;
-	if (masteryGained > 0 && which.toSkill()->grantsLevelUp() && hero->exp < getHeroExperienceLimit())
+	if (masteryGained > 0 && which.toSkill()->grantsLevelUp() && hero->canGainExperience())
 		giveExperience(hero, hero->experienceToGainLevels(masteryGained));
 
 }
@@ -527,7 +446,7 @@ void CGameHandler::handleReceivedPack(GameConnectionID connection, CPackForServe
 	);
 	gameServer().sendPack(received, connection);
 
-	if(isBlockedByQueries(&pack, pack.player))
+	if(isBlockedByActivities(&pack, pack.player))
 	{
 		sendPackageResponse(false);
 	}
@@ -566,20 +485,19 @@ CGameHandler::CGameHandler(IGameServer & server)
 	: server(server)
 	, heroPool(std::make_unique<HeroPoolProcessor>(this))
 	, battles(std::make_unique<BattleProcessor>(this))
-	, queries(std::make_unique<QueriesProcessor>(*this))
-	, turnStartVisitScheduler(std::make_unique<TurnStartVisitScheduler>(*this, *queries))
+	, activities(std::make_unique<ActivityProcessor>(*this))
 	, turnOrder(std::make_unique<TurnOrderProcessor>(this))
 	, turnTimerHandler(std::make_unique<TurnTimerHandler>(*this))
 	, newTurnProcessor(std::make_unique<NewTurnProcessor>(this))
 	, statistics(std::make_unique<StatisticDataSet>())
 	, spellEnv(std::make_unique<ServerSpellCastEnvironment>(this))
 	, playerMessages(std::make_unique<PlayerMessageProcessor>(this))
-	, QID(1)
+	, questionCounter(1)
 	, complainNoCreatures("No creatures to split")
 	, complainNotEnoughCreatures("Cannot split that stack, not enough creatures!")
 	, complainInvalidSlot("Invalid slot accessed!")
+	, complainNotRemovable("Stacks in this garrison are not removable!")
 {
-	queries->setListener(turnStartVisitScheduler.get());
 }
 
 CGameHandler::~CGameHandler() = default;
@@ -614,7 +532,7 @@ void CGameHandler::init(StartInfo *si, Load::ProgressAccumulator & progressTrack
 void CGameHandler::setPortalDwelling(const CGTownInstance * town, bool forced=false, bool clear = false)
 {// bool forced = true - if creature should be replaced, if false - only if no creature was set
 
-	const PlayerState * p = gameInfo().getPlayerState(town->tempOwner);
+	const PlayerState * p = gameInfo().tryGetPlayerState(town->tempOwner);
 	if (!p)
 	{
 		assert(town->tempOwner == PlayerColor::NEUTRAL);
@@ -653,36 +571,10 @@ void CGameHandler::setPortalDwelling(const CGTownInstance * town, bool forced=fa
 		}
 }
 
-void CGameHandler::onPlayerTurnStarted(PlayerColor which)
-{
-	turnTimerHandler->onPlayerGetTurn(which);
-	newTurnProcessor->onPlayerTurnStarted(which);
-}
-
 void CGameHandler::onPlayerTurnEnded(PlayerColor which)
 {
 	turnTimerHandler->onEndTurn(which);
 	newTurnProcessor->onPlayerTurnEnded(which);
-}
-
-void CGameHandler::onAdvInterfaceReady(PlayerColor player)
-{
-	if(uiReadyForDialogs.count(player))
-		return;
-
-	uiReadyForDialogs.insert(player);
-
-	logGlobal->trace("AdvInterfaceReady received for player %s", player);
-
-	// Kick top query for this player: if it's a dialog query waiting for UI, it should prompt now.
-	auto top = queries->topQuery(player);
-	if(!top)
-		return;
-
-	// We only want dialog queries to try prompting here.
-	// They should override onExposure() to "prompt when uiReadyForDialogs is true" (next step),
-	// so triggering exposure is enough.
-	top->onExposure(top);
 }
 
 void CGameHandler::addStatistics(StatisticDataSet &stat) const
@@ -844,7 +736,7 @@ void CGameHandler::giveSpells(const CGTownInstance *t, const CGHeroInstance *h)
 
 bool CGameHandler::removeObject(const CGObjectInstance * obj, const PlayerColor & initiator)
 {
-	if (!obj || !gameInfo().getObj(obj->id))
+	if (!obj || !gameInfo().tryGetObj(obj->id))
 	{
 		logGlobal->error("Something wrong, that object already has been removed or hasn't existed!");
 		return false;
@@ -894,8 +786,8 @@ bool CGameHandler::moveHero(ObjectInstanceID hid, int3 dst, EMovementMode moveme
 	const CGObjectInstance * objectToVisit = nullptr;
 	const CGObjectInstance * guardian = nullptr;
 
-	if (!t.visitableObjects.empty())
-		objectToVisit = gameState().getObjInstance(t.visitableObjects.back());
+	if (const ObjectInstanceID objectID = t.objectVisitedBy(h->id); objectID.hasValue())
+		objectToVisit = gameState().getObjInstance(objectID);
 
 	if (gameInfo().isInTheMap(guardPos))
 	{
@@ -978,6 +870,10 @@ bool CGameHandler::moveHero(ObjectInstanceID hid, int3 dst, EMovementMode moveme
 
 		if (gs->getBattle(objectToVisit->getOwner()) != nullptr)
 			return complainRet("You cannot move your hero there. This object belongs to another player who is engaged in battle and simultaneous turns are still active!");
+
+		// A battle pushed above a pending level-up could kill the hero before the skill is applied
+		if (objectToVisit->getOwner() != h->getOwner() && activities->findActivity<LevelUpRoutine>(objectToVisit->getOwner(), [](const LevelUpRoutine &){ return true; }))
+			return complainRet("You cannot move your hero there. This object belongs to another player who is choosing skills for a hero!");
 	}
 
 	//it's a rock or blocked and not visitable tile
@@ -1006,7 +902,7 @@ bool CGameHandler::moveHero(ObjectInstanceID hid, int3 dst, EMovementMode moveme
 		return complainRet("Can not move garrisoned hero!");
 
 	if(h->movementPointsRemaining() < cost && dst != h->pos && movementMode == EMovementMode::STANDARD)
-		return complainRet("Hero doesn't have any movement points left!");
+		return complainRet(boost::str(boost::format("Hero doesn't have enough movement points to move from %s to %s: has %d, needs %d!") % h->pos.toString() % dst.toString() % h->movementPointsRemaining() % cost));
 
 	if (transit && !canFly && !(canWalkOnSea && t.isWater()) && !CGTeleport::isTeleport(objectToVisit))
 		return complainRet("Hero cannot transit over this tile!");
@@ -1027,8 +923,8 @@ bool CGameHandler::moveHero(ObjectInstanceID hid, int3 dst, EMovementMode moveme
 	{
 		LOG_TRACE_PARAMS(logGlobal, "Hero %s starts movement from %s to %s", h->getNameTextID() % tmh.start.toString() % tmh.end.toString());
 
-		auto moveQuery = std::make_shared<CHeroMovementQuery>(this, tmh, h);
-		queries->addQuery(moveQuery);
+		auto moveActivity = std::make_shared<HeroMovementActivity>(this, tmh, h);
+		activities->addActivity(moveActivity);
 
 		if (leavingTile == LEAVING_TILE)
 			leaveTile();
@@ -1039,7 +935,7 @@ bool CGameHandler::moveHero(ObjectInstanceID hid, int3 dst, EMovementMode moveme
 		tmh.result = result;
 		sendAndApply(tmh);
 
-		if (visitDest == VISIT_DEST && objectToVisit && objectToVisit->id == h->id)
+		if (visitDest == VISIT_DEST && tmh.start == tmh.end)
 		{ // Hero should be always able to visit any object he is staying on even if there are guards around
 			visitObjectOnTile(t, h);
 		}
@@ -1047,14 +943,14 @@ bool CGameHandler::moveHero(ObjectInstanceID hid, int3 dst, EMovementMode moveme
 		{
 			objectVisited(guardian, h);
 
-			moveQuery->visitDestAfterVictory = visitDest==VISIT_DEST;
+			moveActivity->visitDestAfterVictory = visitDest==VISIT_DEST;
 		}
 		else if (visitDest == VISIT_DEST)
 		{
 			visitObjectOnTile(t, h);
 		}
 
-		queries->popIfTop(moveQuery);
+		moveActivity->finish();
 		logGlobal->trace("Hero %s ends movement", h->getNameTextID());
 		return result != TryMoveHero::FAILED;
 	};
@@ -1062,24 +958,26 @@ bool CGameHandler::moveHero(ObjectInstanceID hid, int3 dst, EMovementMode moveme
 	//interaction with blocking object (like resources)
 	auto blockingVisit = [&]() -> bool
 	{
-		for (ObjectInstanceID objectID : t.visitableObjects)
+		// only the object that visitObjectOnTile() would visit may block the hero, same as in pathfinder
+		const ObjectInstanceID objectID = t.objectVisitedBy(h->id);
+		if (!objectID.hasValue())
+			return false;
+
+		const CGObjectInstance * object = gameInfo().getObj(objectID);
+
+		if(h->inBoat() && !object->isBlockedVisitable() && !h->getBoat()->onboardVisitAllowed)
+			return doMove(TryMoveHero::SUCCESS, this->IGNORE_GUARDS, DONT_VISIT_DEST, REMAINING_ON_TILE);
+
+		const auto * questSource = object->asQuestSource();
+		const bool stopsHero = object->isBlockedVisitable() || (questSource && questSource->requiresQuestToPass());
+
+		if (stopsHero && !object->passableFor(h))
 		{
-			const CGObjectInstance * object = gameInfo().getObj(objectID);
+			EVisitDest visitDest = VISIT_DEST;
+			if(h->inBoat() && !h->getBoat()->onboardVisitAllowed)
+				visitDest = DONT_VISIT_DEST;
 
-			if(h->inBoat() && !object->isBlockedVisitable() && !h->getBoat()->onboardVisitAllowed)
-				return doMove(TryMoveHero::SUCCESS, this->IGNORE_GUARDS, DONT_VISIT_DEST, REMAINING_ON_TILE);
-
-            const auto * questSource = object->asQuestSource();
-			const bool stopsHero = object->isBlockedVisitable() || (questSource && questSource->requiresQuestToPass());
-
-			if (object != h && stopsHero && !object->passableFor(h))
-			{
-				EVisitDest visitDest = VISIT_DEST;
-				if(h->inBoat() && !h->getBoat()->onboardVisitAllowed)
-					visitDest = DONT_VISIT_DEST;
-
-				return doMove(TryMoveHero::BLOCKING_VISIT, this->IGNORE_GUARDS, visitDest, REMAINING_ON_TILE);
-			}
+			return doMove(TryMoveHero::BLOCKING_VISIT, this->IGNORE_GUARDS, visitDest, REMAINING_ON_TILE);
 		}
 		return false;
 	};
@@ -1172,11 +1070,11 @@ bool CGameHandler::teleportHero(ObjectInstanceID hid, ObjectInstanceID dstid, ui
 	if (((h->getOwner() != t->getOwner())
 		&& complain("Cannot teleport hero to another player"))
 
-	|| (from->getFactionID() != t->getFactionID()
-		&& complain("Source town and destination town should belong to the same faction"))
-
 	|| ((!from || !from->hasBuilt(BuildingSubID::CASTLE_GATE))
 		&& complain("Hero must be in town with Castle gate for teleporting"))
+
+	|| (from->getFactionID() != t->getFactionID()
+		&& complain("Source town and destination town should belong to the same faction"))
 
 	|| (!t->hasBuilt(BuildingSubID::CASTLE_GATE)
 		&& complain("Cannot teleport hero to town without Castle gate in it")))
@@ -1216,54 +1114,70 @@ void CGameHandler::setOwner(const CGObjectInstance * obj, const PlayerColor owne
 	}
 }
 
-void CGameHandler::showBlockingDialog(const IObjectInterface * caller, BlockingDialog *iw)
+void CGameHandler::setVisitState(const CGHeroInstance * hero, const JsonNode & state)
 {
-	auto dialogQuery = std::make_shared<CBlockingDialogQuery>(this, caller, *iw);
-	queries->addQuery(dialogQuery);
-	iw->queryID = dialogQuery->queryID;
+	assert(hero);
+
+	// Searched from the top of the stack down: a town visit pushes a building visit above
+	// itself, and the state belongs to the innermost one, the one that is running now
+	auto * visit = activities->findActivity<ObjectInteractionActivity>(hero->getOwner(),
+		[hero](const ObjectInteractionActivity & candidate){ return candidate.visitingHero == hero->id; });
+
+	// The object would suspend and never be resumed, so the rest of its visit would be lost
+	if(!visit)
+		throw std::runtime_error("Hero " + hero->getNameTextID() + " stored visit state " + state.toCompactString() + " outside of a visit");
+
+	visit->visitState = state;
+}
+
+void CGameHandler::showBlockingDialog(BlockingDialog *iw)
+{
+	auto dialogActivity = std::make_shared<BlockingDialogActivity>(this, *iw);
+	activities->addActivity(dialogActivity);
+	iw->questionID = dialogActivity->askQuestion();
 	sendAndApply(*iw);
 }
 
 void CGameHandler::showScriptDialog(BlockingDialog * iw)
 {
-	// The dialog sits above the paused script's query; its reply is stashed there and consumed when
-	// the script query is exposed and resumes the coroutine.
-	auto scriptQuery = std::dynamic_pointer_cast<LuaScriptQuery>(queries->topQuery(iw->player));
-	if(!scriptQuery)
+	// The dialog is placed above the paused script activity. Its reply is stored there and
+	// read when the script activity is exposed and resumes the coroutine.
+	auto * scriptActivity = activities->activityAs<LuaScriptActivity>(activities->topActivity(iw->player));
+	if(!scriptActivity)
 	{
-		logGlobal->error("showScriptDialog called without an active script query for player %s", iw->player.toString());
+		logGlobal->error("showScriptDialog called without an active script activity for player %s", iw->player.toString());
 		return;
 	}
 
-	auto dialogQuery = std::make_shared<CGenericQuery>(this, iw->player,
-		[scriptQuery](std::optional<int32_t> reply){ scriptQuery->setPendingAnswer(reply); });
-	queries->addQuery(dialogQuery);
-	iw->queryID = dialogQuery->queryID;
+	auto dialogActivity = std::make_shared<ScriptDialogActivity>(this, iw->player);
+	activities->addActivity(dialogActivity);
+	iw->questionID = dialogActivity->askQuestion();
 	sendAndApply(*iw);
 }
 
 void CGameHandler::runScriptedEvent(scripting::MapEventDispatcher & dispatcher, PlayerColor player, ObjectInstanceID visitingHero,
 	const std::function<std::optional<int>(scripting::MapEventDispatcher &)> & dispatch)
 {
-	// The script may pause on a blocking action; a LuaScriptQuery keeps its coroutine alive between
-	// resumptions and stays on the stack (blocking the event from ending) until the script finishes.
-	auto scriptQuery = std::make_shared<LuaScriptQuery>(this, player);
+	// The script may pause on a blocking action. LuaScriptActivity keeps its coroutine alive
+	// between resumptions and stays on the stack, blocking the end of the event, until the
+	// script finishes.
+	auto scriptActivity = std::make_shared<LuaScriptActivity>(this, player);
 	if(visitingHero.hasValue())
-		scriptQuery->setVisitingHero(visitingHero);
-	queries->addQuery(scriptQuery);
+		scriptActivity->setVisitingHero(visitingHero);
+	activities->addActivity(scriptActivity);
 
 	auto handle = dispatch(dispatcher);
 	if(handle)
-		scriptQuery->setCoroutine(*handle);
+		scriptActivity->setCoroutine(*handle);
 	else
-		queries->popIfTop(scriptQuery);
+		scriptActivity->finish();
 }
 
 void CGameHandler::showTeleportDialog(TeleportDialog *iw)
 {
-	auto dialogQuery = std::make_shared<CTeleportDialogQuery>(this, *iw);
-	queries->addQuery(dialogQuery);
-	iw->queryID = dialogQuery->queryID;
+	auto dialogActivity = std::make_shared<TeleportDialogActivity>(this, *iw);
+	activities->addActivity(dialogActivity);
+	iw->questionID = dialogActivity->askQuestion();
 	sendAndApply(*iw);
 }
 
@@ -1352,15 +1266,29 @@ void CGameHandler::giveCreatures(const CArmedInstance *obj, const CGHeroInstance
 	tryJoiningArmy(obj, h, remove, true);
 }
 
+const CArmedInstance * CGameHandler::getArmyOrThrow(ObjectInstanceID id, const std::string & context)
+{
+	const auto * army = dynamic_cast<const CArmedInstance *>(gameInfo().getObj(id));
+	if (!army)
+		throw std::runtime_error(context + ": object " + std::to_string(id.getNum()) + " has no army");
+	return army;
+}
+
 void CGameHandler::takeCreatures(ObjectInstanceID objid, const std::vector<CStackBasicDescriptor> &creatures, bool forceRemoval)
 {
-	std::vector<CStackBasicDescriptor> remainerForTaking = creatures;
-	if (remainerForTaking.empty())
+	if (creatures.empty())
 		return;
 
-	const auto * army = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(objid));
+	const auto * army = getArmyOrThrow(objid, "takeCreatures");
 
-	for (const CStackBasicDescriptor &stackToTake : remainerForTaking)
+	// rewards and scripts can request units that the army does not have - such request is skipped as a whole
+	if (!army->hasUnits(creatures, !forceRemoval && army->needsLastStack()))
+	{
+		logGlobal->error("Cannot take creatures from %s: army does not have them, or would be left without units", army->describeArmy());
+		return;
+	}
+
+	for (const CStackBasicDescriptor &stackToTake : creatures)
 	{
 		TQuantity collected = 0;
 		while(collected < stackToTake.getCount())
@@ -1374,7 +1302,8 @@ void CGameHandler::takeCreatures(ObjectInstanceID objid, const std::vector<CStac
 					{
 						// take entire stack
 						collected += armySlot.second->getCount();
-						eraseStack(StackLocation(army->id, armySlot.first), forceRemoval);
+						if (!eraseStack(StackLocation(army->id, armySlot.first), forceRemoval))
+							throw std::runtime_error("takeCreatures: failed to take last stack of " + army->describeArmy());
 					}
 					else
 					{
@@ -1387,11 +1316,8 @@ void CGameHandler::takeCreatures(ObjectInstanceID objid, const std::vector<CStac
 				}
 			}
 
-			if (!foundSth) //we went through the whole loop and haven't found appropriate cres
-			{
-				complain("Unexpected failure during taking creatures!");
-				return;
-			}
+			if (!foundSth)
+				throw std::runtime_error("takeCreatures: " + army->describeArmy() + " has no " + stackToTake.getType()->getJsonKey() + " left to take");
 		}
 	}
 }
@@ -1434,8 +1360,8 @@ void CGameHandler::visitCastleObjects(const CGTownInstance * t, const std::vecto
 
 	if (!buildingsToVisit.empty())
 	{
-		auto visitQuery = std::make_shared<TownBuildingVisitQuery>(this, t, visitors, buildingsToVisit);
-		queries->addQuery(visitQuery);
+		auto visitActivity = std::make_shared<TownBuildingVisitActivity>(this, t, visitors, buildingsToVisit);
+		activities->addActivity(visitActivity);
 	}
 }
 
@@ -1636,16 +1562,29 @@ void CGameHandler::heroExchange(ObjectInstanceID hero1, ObjectInstanceID hero2)
 
 	if (gameInfo().getPlayerRelations(h1->getOwner(), h2->getOwner()) != PlayerRelations::ENEMIES)
 	{
-		auto exchange = std::make_shared<CGarrisonDialogQuery>(this, h1, h2);
+		auto exchange = std::make_shared<GarrisonDialogActivity>(this, h1->getOwner(), h1, h2);
+
+		// An AI does not trade with allies, nor should it make a human wait in a window that only
+		// the AI can close, and in hotseat both windows would share one screen.
+		// An ally busy with something else, e.g. their own garrison window, is left out, since
+		// an exchange above it would block it until the initiator closes the window.
+		const PlayerColor partner = h2->getOwner();
+		if(partner != h1->getOwner() && gameInfo().getPlayerState(h1->getOwner())->isHuman() && gameInfo().getPlayerState(partner)->isHuman() && !hasBothPlayersAtSameConnection(h1->getOwner(), partner) && !activities->topActivity(partner))
+			exchange->addPartner(partner);
+
+		activities->addActivity(exchange);
+
 		ExchangeDialog hex;
-		hex.queryID = exchange->queryID;
-		hex.player = h1->getOwner();
+		hex.questionID = exchange->askQuestion();
 		hex.hero1 = hero1;
 		hex.hero2 = hero2;
-		sendAndApply(hex);
+		for(const auto & player : exchange->getPlayers())
+		{
+			hex.player = player;
+			sendAndApply(hex);
+		}
 
 		useScholarSkill(hero1,hero2);
-		queries->addQuery(exchange);
 	}
 }
 
@@ -1654,9 +1593,9 @@ void CGameHandler::sendAndApply(CPackForClient & pack)
 	gameServer().applyPack(pack);
 }
 
-void CGameHandler::sendQueryResolved(QueryID queryID)
+void CGameHandler::sendQuestionResolved(QuestionID questionID)
 {
-	QueryResolved pack(queryID);
+	QuestionResolved pack(questionID);
 	sendAndApply(pack);
 }
 
@@ -1716,9 +1655,23 @@ void CGameHandler::throwIfWrongOwner(GameConnectionID connectionID, const CPackF
 	}
 }
 
+void CGameHandler::throwIfCanNotTakeTroops(GameConnectionID connectionID, const CPackForServer * pack, ObjectInstanceID id)
+{
+	throwIfWrongPlayer(connectionID, pack);
+
+	if(!canTakeTroopsFrom(pack->player, dynamic_cast<const CArmedInstance *>(gameInfo().getObj(id))))
+		throwNotAllowedAction(connectionID);
+}
+
 void CGameHandler::throwIfPlayerNotActive(GameConnectionID connectionID, const CPackForServer * pack)
 {
 	if (!vstd::contains(gs->actingPlayers, pack->player))
+		throwNotAllowedAction(connectionID);
+}
+
+void CGameHandler::throwIfCanNotTrade(GameConnectionID connectionID, const CPackForServer * pack, ObjectInstanceID id1, ObjectInstanceID id2)
+{
+	if(!isAllowedExchange(pack->player, id1, id2))
 		throwNotAllowedAction(connectionID);
 }
 
@@ -1842,10 +1795,18 @@ void CGameHandler::save(const std::string & filename, PlayerColor playerToNotify
 
 	try
 	{
-		CSaveFile save;
-		gameState().saveGame(save);
+		CMemorySerializer header;
+		gameState().saveHeader(header.oser);
+
+		CMemorySerializer game;
+		gameState().saveGame(game.oser);
 		logGlobal->info("Saving server state");
-		save.save(*this);
+		game.oser & *this;
+
+		CSaveFile save;
+		save.addChunk(SaveFileFormat::CHUNK_METADATA, SaveMetadata::create(gameState()).toBytes());
+		save.addChunk(SaveFileFormat::CHUNK_HEADER, header.extractBuffer());
+		save.addChunk(SaveFileFormat::CHUNK_GAMESTATE, game.extractBuffer());
 		const auto saveFile = *CResourceHandler::get("local")->getResourceName(savePath);
 		save.write(saveFile);
 
@@ -1875,12 +1836,34 @@ void CGameHandler::load(const StartInfo &info)
 {
 	logGlobal->info("Loading from %s", info.mapname);
 
-	CLoadFile lf(*CResourceHandler::get()->getResourceName(ResourcePath(info.mapname, EResType::SAVEGAME)), gs.get());
+	const auto saveFileName = CResourceHandler::get()->getResourceName(ResourcePath(info.mapname, EResType::SAVEGAME));
+	if(!saveFileName)
+		throw std::runtime_error("Error: saved game '" + info.mapname + "' not found!");
+
+	const auto & saveFile = *saveFileName;
 	gs = std::make_shared<CGameState>();
 	randomizer = std::make_unique<GameRandomizer>(*gs);
-	gs->loadGame(lf);
-	logGlobal->info("Loading server state");
-	lf.load(*this);
+
+	if(CLoadFile::readVersion(saveFile) < ESerializationVersion::SAVE_CHUNKS)
+	{
+		CLegacyLoadFile lf(saveFile, gs.get());
+		BinaryDeserializer & game = lf.skipToGameState();
+		gs->loadGame(game);
+		logGlobal->info("Loading server state");
+		game & *this;
+	}
+	else
+	{
+		CLoadFile lf(saveFile);
+		SaveMetadata::verifyMods(SaveMetadata::parse(lf.readChunk(SaveFileFormat::CHUNK_METADATA), info.mapname));
+
+		auto game = lf.openChunk(SaveFileFormat::CHUNK_GAMESTATE, gs.get());
+		gs->loadGame(game->iser);
+		logGlobal->info("Loading server state");
+		game->iser & *this;
+		if(!game->isFullyRead())
+			throw std::runtime_error("Error: saved game '" + info.mapname + "' contains unexpected data after game state!");
+	}
 	logGlobal->info("Game has been successfully loaded!");
 
 	gs->preInit(LIBRARY);
@@ -1909,7 +1892,7 @@ bool CGameHandler::bulkSplitStack(SlotID slotSrc, ObjectInstanceID srcOwner, si3
 	if(!slotSrc.validSlot() && complain(complainInvalidSlot))
 		return false;
 
-	const auto * army = dynamic_cast<const CArmedInstance*>(gameInfo().getObjInstance(srcOwner));
+	const auto * army = getArmyOrThrow(srcOwner, "bulkSplitStack");
 	const CCreatureSet & creatureSet = *army;
 
 	if((!vstd::contains(creatureSet.stacks, slotSrc) && complain(complainNoCreatures))
@@ -1953,7 +1936,7 @@ bool CGameHandler::bulkMergeStacks(SlotID slotSrc, ObjectInstanceID srcOwner)
 	if(!slotSrc.validSlot() && complain(complainInvalidSlot))
 		return false;
 
-	const auto * army = dynamic_cast<const CArmedInstance*>(gameInfo().getObjInstance(srcOwner));
+	const auto * army = getArmyOrThrow(srcOwner, "bulkMergeStacks");
 	const CCreatureSet & creatureSet = *army;
 
 	if(!vstd::contains(creatureSet.stacks, slotSrc) && complain(complainNoCreatures))
@@ -1995,14 +1978,20 @@ bool CGameHandler::bulkMoveArmy(ObjectInstanceID srcArmy, ObjectInstanceID destA
 	if(!srcSlot.validSlot() && complain(complainInvalidSlot))
 		return false;
 
-	if(!isAllowedExchange(srcArmy, destArmy))
-		COMPLAIN_RET("That heroes cannot make any exchange!");
-
-	const auto * armySrc = dynamic_cast<const CArmedInstance*>(gameInfo().getObjInstance(srcArmy));
+	const auto * armySrc = getArmyOrThrow(srcArmy, "bulkMoveArmy");
 	const auto * armyDest = dynamic_cast<const CArmedInstance*>(gameInfo().getObjInstance(destArmy));
+
+	if(!armyDest)
+		COMPLAIN_RET("Object has no army!");
+
+	if(armySrc == armyDest)
+		COMPLAIN_RET("Cannot move army into itself!");
 
 	if(!vstd::contains(armySrc->stacks, srcSlot) && complain(complainNoCreatures))
 		return false;
+
+	if(armySrc->isLocked())
+		COMPLAIN_RET(complainNotRemovable);
 
 	auto freeSlots = armyDest->getFreeSlots();
 	bool allTroopsMoved = true;
@@ -2036,7 +2025,7 @@ bool CGameHandler::bulkMoveArmy(ObjectInstanceID srcArmy, ObjectInstanceID destA
 	}
 
 	// all troops were moved, but we can't leave source hero without troops - undo movement of 1 unit from srcSlot
-	if (allTroopsMoved)
+	if (allTroopsMoved && armySrc->needsLastStack())
 	{
 		if (armySrc->getStack(srcSlot).getCount() == 1)
 		{
@@ -2066,7 +2055,7 @@ bool CGameHandler::bulkSplitAndRebalanceStack(SlotID slotSrc, ObjectInstanceID s
 	if(!slotSrc.validSlot() && complain(complainInvalidSlot))
 		return false;
 
-	const auto * army = dynamic_cast<const CArmedInstance*>(gameInfo().getObjInstance(srcOwner));
+	const auto * army = getArmyOrThrow(srcOwner, "bulkSplitAndRebalanceStack");
 	const CCreatureSet & creatureSet = *army;
 
 	if(!vstd::contains(creatureSet.stacks, slotSrc) && complain(complainNoCreatures))
@@ -2140,7 +2129,8 @@ bool CGameHandler::bulkSplitAndRebalanceStack(SlotID slotSrc, ObjectInstanceID s
 		rs.srcSlot = slotSrc;
 		rs.dstSlot = slot;
 		rs.count = vstd::divideAndCeil(unitsToMove, slotsLeft);
-		bulkSRS.moves.push_back(rs);
+		if (rs.count > 0)
+			bulkSRS.moves.push_back(rs);
 
 		unitsToMove -= rs.count;
 		slotsLeft -= 1;
@@ -2152,14 +2142,22 @@ bool CGameHandler::bulkSplitAndRebalanceStack(SlotID slotSrc, ObjectInstanceID s
 
 bool CGameHandler::arrangeStacks(ObjectInstanceID id1, ObjectInstanceID id2, ui8 what, SlotID p1, SlotID p2, si32 val, PlayerColor player)
 {
-	const auto * s1 = dynamic_cast<const CArmedInstance *>(gameInfo().getObj(id1));
-	const auto * s2 = dynamic_cast<const CArmedInstance *>(gameInfo().getObj(id2));
+	const auto * s1 = dynamic_cast<const CArmedInstance *>(gameInfo().tryGetObj(id1));
+	const auto * s2 = dynamic_cast<const CArmedInstance *>(gameInfo().tryGetObj(id2));
 
 	if (s1 == nullptr || s2 == nullptr)
 	{
 		complain("Cannot exchange stacks between non-existing objects!!\n");
 		return false;
 	}
+
+	const auto takingTroopsComplaint = [&]()
+	{
+		return boost::str(boost::format("Player %s can't take troops from another player! Armies: %s (owner %d, slot %d) and %s (owner %d, slot %d)")
+			% player.toString()
+			% s1->describeArmy() % s1->tempOwner.getNum() % p1.getNum()
+			% s2->describeArmy() % s2->tempOwner.getNum() % p2.getNum());
+	};
 
 	const CCreatureSet & S1 = *s1;
 	const CCreatureSet & S2 = *s2;
@@ -2172,58 +2170,42 @@ bool CGameHandler::arrangeStacks(ObjectInstanceID id1, ObjectInstanceID id2, ui8
 		return false;
 	}
 
-	if (!isAllowedExchange(id1,id2))
-	{
-		complain("Cannot exchange stacks between these two objects!\n");
-		return false;
-	}
+	if (sl1.army == sl2.army && sl1.slot == sl2.slot)
+		COMPLAIN_RET("Cannot arrange stacks - slots are the same!");
 
 	// We can always put stacks into locked garrison, but not take them out of it
 	auto notRemovable = [&](const CArmedInstance * army)
 	{
-		if (id1 != id2) // Stack arrangement inside locked garrison is allowed
+		// Stack arrangement inside locked garrison is allowed
+		if (id1 != id2 && army->isLocked())
 		{
-			const auto * g = dynamic_cast<const CGGarrison *>(army);
-			if (g && !g->removableUnits)
-			{
-				complain("Stacks in this garrison are not removable!\n");
-				return true;
-			}
+			complain(complainNotRemovable);
+			return true;
 		}
 		return false;
 	};
 
 	if (what==1) //swap
 	{
-		if (((s1->tempOwner != player && s1->tempOwner != PlayerColor::UNFLAGGABLE) && s1->getStackCount(p1))
-		  || ((s2->tempOwner != player && s2->tempOwner != PlayerColor::UNFLAGGABLE) && s2->getStackCount(p2)))
+		if ((!canTakeTroopsFrom(player, s1) && s1->getStackCount(p1))
+		  || (!canTakeTroopsFrom(player, s2) && s2->getStackCount(p2)))
 		{
-			complain("Can't take troops from another player!");
+			complain(takingTroopsComplaint());
 			return false;
 		}
 
-		if (sl1.army == sl2.army && sl1.slot == sl2.slot)
-		{
-			complain("Cannot swap stacks - slots are the same!");
-			return false;
-		}
+		if (s1->slotEmpty(p1) && s2->slotEmpty(p2))
+			COMPLAIN_RET("Cannot swap stacks - both slots are empty!");
 
-		if (!s1->slotEmpty(p1) && !s2->slotEmpty(p2))
-		{
-			if (notRemovable(s1) || notRemovable(s2))
-				return false;
-		}
-		if (s1->slotEmpty(p1) && notRemovable(s2))
-			return false;
-		else if (s2->slotEmpty(p2) && notRemovable(s1))
+		if ((!s1->slotEmpty(p1) && notRemovable(s1)) || (!s2->slotEmpty(p2) && notRemovable(s2)))
 			return false;
 
-		swapStacks(sl1, sl2);
+		return swapStacks(sl1, sl2);
 	}
 	else if (what==2)//merge
 	{
 		if ((s1->getCreature(p1) != s2->getCreature(p2) && complain("Cannot merge different creatures stacks!"))
-		|| (((s1->tempOwner != player && s1->tempOwner != PlayerColor::UNFLAGGABLE) && s2->getStackCount(p2)) && complain("Can't take troops from another player!")))
+		|| (!canTakeTroopsFrom(player, s1) && complain(takingTroopsComplaint())))
 			return false;
 
 		if (s1->slotEmpty(p1) || s2->slotEmpty(p2))
@@ -2234,17 +2216,17 @@ bool CGameHandler::arrangeStacks(ObjectInstanceID id1, ObjectInstanceID id2, ui8
 		else if (notRemovable(s1))
 			return false;
 
-		moveStack(sl1, sl2);
+		return moveStack(sl1, sl2);
 	}
 	else if (what==3) //split
 	{
 		const int countToMove = val - s2->getStackCount(p2);
 		const int countLeftOnSrc = s1->getStackCount(p1) - countToMove;
 
-		if (  (s1->tempOwner != player && countLeftOnSrc < s1->getStackCount(p1))
-			|| (s2->tempOwner != player && val < s2->getStackCount(p2)))
+		if (  (!canTakeTroopsFrom(player, s1) && countLeftOnSrc < s1->getStackCount(p1))
+			|| (!canTakeTroopsFrom(player, s2) && val < s2->getStackCount(p2)))
 		{
-			complain("Can't move troops of another player!");
+			complain(takingTroopsComplaint());
 			return false;
 		}
 
@@ -2266,20 +2248,17 @@ bool CGameHandler::arrangeStacks(ObjectInstanceID id1, ObjectInstanceID id2, ui8
 				return false;
 			}
 
-			if (notRemovable(s1))
-			{
-				if (s1->getStackCount(p1) > countLeftOnSrc)
-					return false;
-			}
-			else if (notRemovable(s2))
-			{
-				if (s2->getStackCount(p1) < countLeftOnSrc)
-					return false;
-			}
+			if (countToMove > 0 && notRemovable(s1))
+				return false;
+			if (countToMove < 0 && notRemovable(s2))
+				return false;
 
-			moveStack(sl1, sl2, countToMove);
-			//S2.slots[p2]->count = val;
-			//S1.slots[p1]->count = total - val;
+			// negative countToMove means creatures flow from dest to source - swap direction
+			// so RebalanceStacks always carries a positive count (and never the magic value -1)
+			if (countToMove > 0)
+				return moveStack(sl1, sl2, countToMove);
+			if (countToMove < 0)
+				return moveStack(sl2, sl1, -countToMove);
 		}
 		else //split one stack to the two
 		{
@@ -2292,9 +2271,12 @@ bool CGameHandler::arrangeStacks(ObjectInstanceID id1, ObjectInstanceID id2, ui8
 			if (notRemovable(s1))
 				return false;
 
-			moveStack(sl1, sl2, val);
+			return moveStack(sl1, sl2, val);
 		}
-
+	}
+	else
+	{
+		COMPLAIN_RET("Unknown stack arrangement mode " + std::to_string(what));
 	}
 	return true;
 }
@@ -2312,14 +2294,19 @@ bool CGameHandler::hasBothPlayersAtSameConnection(PlayerColor left, PlayerColor 
 bool CGameHandler::disbandCreature(ObjectInstanceID id, SlotID pos)
 {
 	const auto * s1 = dynamic_cast<const CArmedInstance *>(gameInfo().getObjInstance(id));
+	if (!s1)
+		COMPLAIN_RET("Object has no army!");
+
 	if (!vstd::contains(s1->stacks,pos))
 	{
 		complain("Illegal call to disbandCreature - no such stack in army!");
 		return false;
 	}
 
-	eraseStack(StackLocation(s1->id, pos));
-	return true;
+	if (s1->isLocked())
+		COMPLAIN_RET(complainNotRemovable);
+
+	return eraseStack(StackLocation(s1->id, pos));
 }
 
 void CGameHandler::buildStructureForced(ObjectInstanceID townID, BuildingID building)
@@ -2528,8 +2515,8 @@ bool CGameHandler::visitTownBuilding(ObjectInstanceID tid, BuildingID bid)
 		std::vector<const CGHeroInstance*> visitors;
 		buildingsToVisit.push_back(bid);
 		visitors.push_back(t->getVisitingHero());
-		auto visitQuery = std::make_shared<TownBuildingVisitQuery>(this, t, visitors, buildingsToVisit);
-		queries->addQuery(visitQuery);
+		auto visitActivity = std::make_shared<TownBuildingVisitActivity>(this, t, visitors, buildingsToVisit);
+		activities->addActivity(visitActivity);
 		return true;
 	}
 
@@ -2606,13 +2593,10 @@ bool CGameHandler::spellResearch(ObjectInstanceID tid, SpellID spellAtSlot, bool
 
 bool CGameHandler::recruitCreatures(ObjectInstanceID objid, ObjectInstanceID dstid, CreatureID crid, int32_t cram, int32_t fromLvl, PlayerColor player)
 {
-	const auto * dwelling = dynamic_cast<const CGDwelling *>(gameInfo().getObj(objid));
-	const auto * town = dynamic_cast<const CGTownInstance *>(gameInfo().getObj(objid));
-	const auto * army = dynamic_cast<const CArmedInstance *>(gameInfo().getObj(dstid));
-	const auto * hero = dynamic_cast<const CGHeroInstance *>(gameInfo().getObj(dstid));
-	const auto * c = crid.toCreature();
-
-	const bool warMachine = c->warMachine != ArtifactID::NONE;
+	const auto * dwelling = dynamic_cast<const CGDwelling *>(gameInfo().tryGetObj(objid));
+	const auto * town = dynamic_cast<const CGTownInstance *>(gameInfo().tryGetObj(objid));
+	const auto * army = dynamic_cast<const CArmedInstance *>(gameInfo().tryGetObj(dstid));
+	const auto * hero = dynamic_cast<const CGHeroInstance *>(gameInfo().tryGetObj(dstid));
 
 	//TODO: check if hero is actually visiting object
 
@@ -2651,10 +2635,23 @@ bool CGameHandler::recruitCreatures(ObjectInstanceID objid, ObjectInstanceID dst
 			break;
 		}
 	}
+
+	COMPLAIN_RET_FALSE_IF(!found, "Cannot recruit: no such creatures!");
+
+	const auto * c = crid.toCreature();
+	const bool warMachine = c->warMachine != ArtifactID::NONE;
+
+	if (warMachine)
+	{
+		COMPLAIN_RET_FALSE_IF(!hero, "Only hero can buy war machines");
+		COMPLAIN_RET_FALSE_IF(!hero->canRecruitWarMachine(c->warMachine), "Hero can not recruit this war machine!");
+		// hero can only carry a single war machine of each type
+		vstd::amin(cram, 1);
+	}
+
 	SlotID slot = army->getSlotFor(crid);
 
-	if((!found && complain("Cannot recruit: no such creatures!"))
-		|| (cram > LIBRARY->creh->objects.at(crid)->maxAmount(gameInfo().getPlayerState(army->tempOwner)->resources) && complain("Cannot recruit: lack of resources!"))
+	if((cram > c->maxAmount(gameInfo().getPlayerState(army->tempOwner)->resources) && complain("Cannot recruit: lack of resources!"))
 		|| (cram <= 0 && complain("Cannot recruit: cram <= 0!"))
 		|| (!slot.validSlot() && !warMachine && complain("Cannot recruit: no available slot!")))
 	{
@@ -2673,37 +2670,17 @@ bool CGameHandler::recruitCreatures(ObjectInstanceID objid, ObjectInstanceID dst
 	sendAndApply(sac);
 
 	if (warMachine)
-	{
-		ArtifactID artId = c->warMachine;
-		const CArtifact * art = artId.toArtifact();
+		return giveHeroWarMachine(hero, c->warMachine);
 
-		COMPLAIN_RET_FALSE_IF(!hero, "Only hero can buy war machines");
-		COMPLAIN_RET_FALSE_IF(artId == ArtifactID::CATAPULT, "Catapult cannot be recruited!");
-		COMPLAIN_RET_FALSE_IF(nullptr == art, "Invalid war machine artifact");
-		COMPLAIN_RET_FALSE_IF(hero->hasArt(artId),"Hero already has this machine!");
-
-		bool hasFreeSlot = false;
-		for(auto possibleSlot : art->getPossibleSlots().at(ArtBearer::HERO))
-			if (hero->getArt(possibleSlot) == nullptr)
-				hasFreeSlot = true;
-
-		if (!hasFreeSlot)
-		{
-			auto possibleSlot = art->getPossibleSlots().at(ArtBearer::HERO).front();
-			removeArtifact(ArtifactLocation(hero->id, possibleSlot));
-		}
-		return giveHeroNewArtifact(hero, artId, ArtifactPosition::FIRST_AVAILABLE);
-	}
-	else
-	{
-		addToSlot(StackLocation(army->id, slot), c, cram);
-	}
-	return true;
+	return addToSlot(StackLocation(army->id, slot), c, cram);
 }
 
 bool CGameHandler::upgradeCreature(ObjectInstanceID objid, SlotID pos, CreatureID upgID)
 {
 	const auto * obj = dynamic_cast<const CArmedInstance *>(gameInfo().getObjInstance(objid));
+	if (!obj)
+		COMPLAIN_RET("Object has no army!");
+
 	if (!obj->hasStackAtSlot(pos))
 	{
 		COMPLAIN_RET("Cannot upgrade, no stack at slot " + std::to_string(pos));
@@ -2714,11 +2691,9 @@ bool CGameHandler::upgradeCreature(ObjectInstanceID objid, SlotID pos, CreatureI
 	const PlayerState *p = gameInfo().getPlayerState(player);
 	int crQuantity = obj->stacks.at(pos)->getCount();
 
-	//check if upgrade is possible
-	if (!upgradeInfo.hasUpgrades() && complain("That upgrade is not possible!"))
-	{
-		return false;
-	}
+	if (!vstd::contains(upgradeInfo.getAvailableUpgrades(), upgID))
+		COMPLAIN_RET("That upgrade is not possible!");
+
 	TResources totalCost = upgradeInfo.getUpgradeCostsFor(upgID) * crQuantity;
 
 	//check if player has enough resources
@@ -2729,17 +2704,18 @@ bool CGameHandler::upgradeCreature(ObjectInstanceID objid, SlotID pos, CreatureI
 	giveResources(player, -totalCost);
 	statistics->getPlayerAccumulator(player).spentResourcesForArmy += totalCost;
 
-	//upgrade creature
-	changeStackType(StackLocation(obj->id, pos), upgID.toCreature());
-	return true;
+	return changeStackType(StackLocation(obj->id, pos), upgID.toCreature());
 }
 
 bool CGameHandler::changeStackType(const StackLocation &sl, const CCreature *c)
 {
-	const auto * obj = dynamic_cast<const CArmedInstance *>(gameInfo().getObjInstance(sl.army));
+	const auto * obj = getArmyOrThrow(sl.army, "changeStackType");
 
 	if (!obj->hasStackAtSlot(sl.slot))
-		COMPLAIN_RET("Cannot find a stack to change type");
+		throw std::runtime_error("changeStackType: " + obj->describeArmy() + " has no stack at slot " + std::to_string(sl.slot.getNum()));
+
+	if (!c)
+		throw std::runtime_error("changeStackType: no creature to change stack of " + obj->describeArmy() + " into");
 
 	SetStackType sst;
 	sst.army = obj->id;
@@ -2770,8 +2746,7 @@ void CGameHandler::moveArmy(const CArmedInstance *src, const CArmedInstance *dst
 			}
 			else
 			{
-				complain("Unexpected failure during an attempt to move army from " + src->nodeName() + " to " + dst->nodeName() + "!");
-				return;
+				throw std::runtime_error("moveArmy: no free slot to move army from " + src->describeArmy() + " to " + dst->describeArmy());
 			}
 		}
 		else
@@ -2844,10 +2819,6 @@ bool CGameHandler::moveArtifact(const PlayerColor & player, const ArtifactLocati
 	assert(srcArtSet);
 	assert(dstArtSet);
 
-	// Make sure exchange is even possible between the two heroes.
-	if(!isAllowedExchange(src.artHolder, dst.artHolder))
-		COMPLAIN_RET("That heroes cannot make any exchange!");
-
 	COMPLAIN_RET_FALSE_IF(!ArtifactUtils::checkIfSlotValid(*srcArtSet, src.slot), "moveArtifact: wrong artifact source slot");
 	const auto * srcArtifact = srcArtSet->getArt(src.slot);
 	auto dstSlot = dst.slot;
@@ -2912,10 +2883,6 @@ bool CGameHandler::moveArtifact(const PlayerColor & player, const ArtifactLocati
 
 bool CGameHandler::bulkMoveArtifacts(const PlayerColor & player, ObjectInstanceID srcId, ObjectInstanceID dstId, bool swap, bool equipped, bool backpack)
 {
-	// Make sure exchange is even possible between the two heroes.
-	if(!isAllowedExchange(srcId, dstId))
-		COMPLAIN_RET("That heroes cannot make any exchange!");
-
 	const auto * psrcSet = gameState().getArtSet(srcId);
 	const auto * pdstSet = gameState().getArtSet(dstId);
 	if((!psrcSet) || (!pdstSet))
@@ -3157,7 +3124,7 @@ bool CGameHandler::switchArtifactsCostume(const PlayerColor & player, const Obje
 {
 	const auto * artSet = gameState().getArtSet(heroID);
 	COMPLAIN_RET_FALSE_IF(artSet == nullptr, "switchArtifactsCostume: wrong hero's ID");
-	const auto * playerState = gameInfo().getPlayerState(player);
+	const auto * playerState = gameInfo().tryGetPlayerState(player);
 	COMPLAIN_RET_FALSE_IF(playerState == nullptr, "switchArtifactsCostume: wrong player");
 
 	if(auto costume = playerState->costumesArtifacts.find(costumeIdx); costume != playerState->costumesArtifacts.end())
@@ -3308,29 +3275,28 @@ bool CGameHandler::buyArtifact(ObjectInstanceID hid, ArtifactID aid)
 		const CArtifact * art = aid.toArtifact();
 		COMPLAIN_RET_FALSE_IF(nullptr == art, "Invalid artifact index to buy");
 		COMPLAIN_RET_FALSE_IF(art->getWarMachine() == CreatureID::NONE, "War machine artifact required");
-		COMPLAIN_RET_FALSE_IF(hero->hasArt(aid),"Hero already has this machine!");
+		COMPLAIN_RET_FALSE_IF(!hero->canRecruitWarMachine(aid), "Hero can not buy this war machine!");
 		const int price = art->getPrice();
 		COMPLAIN_RET_FALSE_IF(gameInfo().getPlayerState(hero->getOwner())->resources[EGameResID::GOLD] < price, "Not enough gold!");
 
 		if(town->isWarMachineAvailable(aid))
 		{
-			bool hasFreeSlot = false;
-			for(auto slot : art->getPossibleSlots().at(ArtBearer::HERO))
-				if (hero->getArt(slot) == nullptr)
-					hasFreeSlot = true;
-
-			if (!hasFreeSlot)
-			{
-				auto slot = art->getPossibleSlots().at(ArtBearer::HERO).front();
-				removeArtifact(ArtifactLocation(hero->id, slot));
-			}
-
 			giveResource(hero->getOwner(),EGameResID::GOLD,-price);
-			return giveHeroNewArtifact(hero, aid, ArtifactPosition::FIRST_AVAILABLE);
+			return giveHeroWarMachine(hero, aid);
 		}
 		else
 			COMPLAIN_RET("This machine is unavailable here!");
 	}
+}
+
+bool CGameHandler::giveHeroWarMachine(const CGHeroInstance * hero, const ArtifactID & warMachine)
+{
+	const ArtifactPosition slot = hero->getWarMachineSlot(warMachine);
+
+	if (hero->getArt(slot))
+		removeArtifact(ArtifactLocation(hero->id, slot));
+
+	return giveHeroNewArtifact(hero, warMachine, slot);
 }
 
 bool CGameHandler::buyArtifact(const IMarket *m, const CGHeroInstance *h, GameResID rid, ArtifactID aid)
@@ -3347,6 +3313,9 @@ bool CGameHandler::buyArtifact(const IMarket *m, const CGHeroInstance *h, GameRe
 
 	if (gameInfo().getResource(h->tempOwner, rid) < b1)
 		COMPLAIN_RET("You can't afford to buy this artifact!");
+
+	if(!aid.toArtifact()->canBePutAt(h))
+		COMPLAIN_RET("Hero has no slot for this artifact!");
 
 	giveResource(h->tempOwner, rid, -b1);
 
@@ -3463,9 +3432,13 @@ bool CGameHandler::sellCreatures(ui32 count, const IMarket *market, const CGHero
 	if (!vstd::contains(hero->Slots(), slot))
 		COMPLAIN_RET("Hero doesn't have any creature in that slot!");
 
+	if (!vstd::contains(market->availableItemsIds(EMarketMode::CREATURE_RESOURCE), TradeItemBuy(resourceID)))
+		COMPLAIN_RET("Market does not trade this resource!");
+
 	const CStackInstance &s = hero->getStack(slot);
 
-	if (s.getCount() < static_cast<TQuantity>(count) //can't sell more creatures than have
+	if (count == 0
+		|| static_cast<ui32>(s.getCount()) < count //can't sell more creatures than have
 		|| (hero->stacksCount() == 1 && hero->needsLastStack() && s.getCount() == count)) //can't sell last stack
 	{
 		COMPLAIN_RET("Not enough creatures in army!");
@@ -3476,11 +3449,8 @@ bool CGameHandler::sellCreatures(ui32 count, const IMarket *market, const CGHero
 	market->getOffer(s.getId(), resourceID, b1, b2, EMarketMode::CREATURE_RESOURCE);
 	int units = count / b1; //how many base quantities we trade
 
-	if (count%b1) //all offered units of resource should be used, if not -> somewhere in calculations must be an error
-	{
-		//TODO: complain?
-		assert(0);
-	}
+	if (count % b1 != 0) //all offered units should be used
+		COMPLAIN_RET("Invalid deal, not all offered units were used.");
 
 	changeStackCount(StackLocation(hero->id, slot), -static_cast<int>(count), ChangeValueMode::RELATIVE);
 
@@ -3518,7 +3488,7 @@ bool CGameHandler::transformInUndead(const IMarket *market, const CGHeroInstance
 
 bool CGameHandler::sendResources(ui32 val, PlayerColor player, GameResID r1, PlayerColor r2)
 {
-	const PlayerState *p2 = gameInfo().getPlayerState(r2, false);
+	const PlayerState *p2 = gameInfo().tryGetPlayerState(r2);
 	if (!p2  ||  p2->status != EPlayerStatus::INGAME)
 	{
 		complain("Dest player must be in game!");
@@ -3600,30 +3570,51 @@ bool CGameHandler::setTownName(ObjectInstanceID tid, std::string & name)
 	return true;
 }
 
-bool CGameHandler::queryReply(QueryID qid, std::optional<int32_t> answer, PlayerColor player)
+bool CGameHandler::answerQuestion(QuestionID questionID, std::optional<int32_t> answer, PlayerColor player)
 {
-	logGlobal->trace("Player %s attempts answering query %d with answer:", player, qid);
 	if (answer)
-		logGlobal->trace("%d", *answer);
+		logGlobal->trace("Player %s answers activity %d with %d", player, questionID, *answer);
+	else
+		logGlobal->trace("Player %s answers activity %d with no value", player, questionID);
 
-	auto topQuery = queries->topQuery(player);
-
-	COMPLAIN_RET_FALSE_IF(!topQuery, "This player doesn't have any queries!");
-
-	if(topQuery->queryID != qid)
+	// The reply names a question id, not a stack position. The client can not know what the
+	// server pushed since it was asked, so a reply for an activity that is no longer on top
+	// is valid and is stored to be resolved later.
+	switch(activities->submitReply(questionID, player, answer))
 	{
-		auto currentQuery = queries->getQuery(qid);
+		case ReplyOutcome::Accepted:
+			return true;
 
-		if(currentQuery != nullptr && currentQuery->endsByPlayerAnswer())
-			currentQuery->setReply(answer);
+		// Nothing removes a question without its answer, so both mean that the client answered twice
+		case ReplyOutcome::IgnoredAlreadyCompleted:
+			complain(boost::str(boost::format("Player %s replied to question %d that is already resolved") % player.toString() % questionID));
+			return true;
 
-		COMPLAIN_RET("This player top query has different ID!"); //topQuery->queryID != qid
+		case ReplyOutcome::IgnoredAlreadyAnswered:
+			complain(boost::str(boost::format("Player %s replied to question %d more than once") % player.toString() % questionID));
+			return true;
+
+		case ReplyOutcome::RejectedWrongPlayer:
+			logGlobal->warn("Player %s replied to activity %d that does not affect them!\nActivities:\n%s", player, questionID, activities->describeStacks());
+			COMPLAIN_RET("Attempt to answer an activity of another player!");
+
+		case ReplyOutcome::RejectedMissingAnswer:
+			logGlobal->warn("Player %s replied to activity %d without an answer!\nActivities:\n%s", player, questionID, activities->describeStacks());
+			COMPLAIN_RET("This activity needs an answer!");
+
+		case ReplyOutcome::RejectedInvalidAnswer:
+			logGlobal->warn("Player %s replied to activity %d with an answer it was not offered!\nActivities:\n%s", player, questionID, activities->describeStacks());
+			COMPLAIN_RET("This answer was not offered!");
+
+		case ReplyOutcome::RejectedNotAnswerable:
+			logGlobal->warn("Player %s replied to activity %d that cannot be ended by an answer!\nActivities:\n%s", player, questionID, activities->describeStacks());
+			COMPLAIN_RET("This activity cannot be ended by player's answer!");
+
+		case ReplyOutcome::RejectedUnknownActivity:
+		default:
+			logGlobal->error("Player %s replied to unknown activity %d!\nActivities:\n%s", player, questionID, activities->describeStacks());
+			COMPLAIN_RET("Attempt to answer an activity that does not exist!");
 	}
-	COMPLAIN_RET_FALSE_IF(!topQuery->endsByPlayerAnswer(), "This query cannot be ended by player's answer!");
-
-	topQuery->setReply(answer);
-	queries->popQuery(topQuery);
-	return true;
 }
 
 bool CGameHandler::complain(const std::string &problem)
@@ -3639,7 +3630,7 @@ bool CGameHandler::complain(const std::string &problem)
 	return true;
 }
 
-void CGameHandler::showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID hid, bool removableUnits, const MetaString & customTitle)
+void CGameHandler::showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID hid, const MetaString & customTitle)
 {
 	const auto * upperArmy = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(upobj));
 	const auto * lowerArmy = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(hid));
@@ -3647,98 +3638,98 @@ void CGameHandler::showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID h
 	assert(lowerArmy);
 	assert(upperArmy);
 
-	auto garrisonQuery = std::make_shared<CGarrisonDialogQuery>(this, upperArmy, lowerArmy);
-	queries->addQuery(garrisonQuery);
+	// The client shows the window only to the owner of the hero
+	auto garrisonActivity = std::make_shared<GarrisonDialogActivity>(this, lowerArmy->getOwner(), upperArmy, lowerArmy);
+	activities->addActivity(garrisonActivity);
 
 	GarrisonDialog gd;
 	gd.hid = hid;
 	gd.objid = upobj;
-	gd.removableUnits = removableUnits;
 	gd.customTitle = customTitle;
-	gd.queryID = garrisonQuery->queryID;
+	gd.questionID = garrisonActivity->askQuestion();
 	sendAndApply(gd);
 }
 
-void CGameHandler::showObjectWindow(const CGObjectInstance * object, EOpenWindowMode window, const CGHeroInstance * visitor, bool addQuery)
+void CGameHandler::showObjectWindow(const CGObjectInstance * object, EOpenWindowMode window, const CGHeroInstance * visitor, bool addActivity)
 {
 	OpenWindow pack;
 	pack.window = window;
 	pack.object = object->id;
 	pack.visitor = visitor->id;
 
-	if (addQuery)
+	if (addActivity)
 	{
-		auto windowQuery = std::make_shared<OpenWindowQuery>(this, visitor, window);
-		pack.queryID = windowQuery->queryID;
-		queries->addQuery(windowQuery);
+		auto windowActivity = std::make_shared<OpenWindowActivity>(this, visitor, window);
+		pack.questionID = windowActivity->askQuestion();
+		activities->addActivity(windowActivity);
 	}
 	sendAndApply(pack);
 }
 
-bool CGameHandler::isAllowedExchange(ObjectInstanceID id1, ObjectInstanceID id2)
+bool CGameHandler::isInGarrisonDialog(PlayerColor player, ObjectInstanceID army)
 {
+	const auto * exchange = activities->activityAs<GarrisonDialogActivity>(activities->topActivity(player));
+	return exchange && (army == exchange->exchangingArmies.at(0)->id || army == exchange->exchangingArmies.at(1)->id);
+}
+
+bool CGameHandler::canTakeTroopsFrom(PlayerColor player, const CArmedInstance * army)
+{
+	if (!army)
+		return false;
+
+	if (army->tempOwner == player)
+		return true;
+
+	// units left by a reward or a joining monster have no owner and are taken through the garrison window;
+	// armies of other players, allies included, only accept units
+	return army->tempOwner == PlayerColor::UNFLAGGABLE && isInGarrisonDialog(player, army->id);
+}
+
+bool CGameHandler::isAllowedExchange(PlayerColor player, ObjectInstanceID id1, ObjectInstanceID id2)
+{
+	// An exchange window lets everyone in it trade between its two armies, even an ally
+	// whose turn it is not
+	if(isInGarrisonDialog(player, id1) && isInGarrisonDialog(player, id2))
+		return true;
+
+	// Anything else needs no window, but only the acting player may do it
+	if(!vstd::contains(gs->actingPlayers, player))
+		return false;
+
 	if (id1 == id2)
 		return true;
 
-	for(const auto & query : queries->allQueries())
-	{
-		const auto * garrisonQuery = dynamic_cast<const CGarrisonDialogQuery *>(query.get());
-		if(garrisonQuery == nullptr)
-			continue;
+	const CGObjectInstance *o1 = gameInfo().tryGetObj(id1);
+	const CGObjectInstance *o2 = gameInfo().tryGetObj(id2);
+	if (!o1 || !o2)
+		return false;
 
-		const bool matchesForward = garrisonQuery->exchangingArmies[0]->id == id1 && garrisonQuery->exchangingArmies[1]->id == id2;
-		const bool matchesBackward = garrisonQuery->exchangingArmies[0]->id == id2 && garrisonQuery->exchangingArmies[1]->id == id1;
-		if(matchesForward || matchesBackward)
+	if (o1->ID == Obj::TOWN)
+	{
+		const auto *t = dynamic_cast<const CGTownInstance*>(o1);
+		if (t->getVisitingHero() == o2  ||  t->getGarrisonHero() == o2)
+			return true;
+	}
+	if (o2->ID == Obj::TOWN)
+	{
+		const auto *t = dynamic_cast<const CGTownInstance*>(o2);
+		if (t->getVisitingHero() == o1  ||  t->getGarrisonHero() == o1)
 			return true;
 	}
 
-	const CGObjectInstance *o1 = gameInfo().getObj(id1);
-	const CGObjectInstance *o2 = gameInfo().getObj(id2);
-	if (!o1 || !o2)
-		return true; //arranging stacks within an object should be always allowed
+	const auto * market = gameState().getMarket(id1);
+	if(market == nullptr)
+		market = gameState().getMarket(id2);
+	if(market)
+		return market->allowsTrade(EMarketMode::ARTIFACT_EXP);
 
-	if (o1 && o2)
+	if (o1->ID == Obj::HERO && o2->ID == Obj::HERO)
 	{
-		if (o1->ID == Obj::TOWN)
-		{
-			const auto *t = dynamic_cast<const CGTownInstance*>(o1);
-			if (t->getVisitingHero() == o2  ||  t->getGarrisonHero() == o2)
-				return true;
-		}
-		if (o2->ID == Obj::TOWN)
-		{
-			const auto *t = dynamic_cast<const CGTownInstance*>(o2);
-			if (t->getVisitingHero() == o1  ||  t->getGarrisonHero() == o1)
-				return true;
-		}
+		const auto *h1 = dynamic_cast<const CGHeroInstance*>(o1);
+		const auto *h2 = dynamic_cast<const CGHeroInstance*>(o2);
 
-		const auto * market = gameState().getMarket(id1);
-		if(market == nullptr)
-			market = gameState().getMarket(id2);
-		if(market)
-			return market->allowsTrade(EMarketMode::ARTIFACT_EXP);
-
-		if (o1->ID == Obj::HERO && o2->ID == Obj::HERO)
-		{
-			const auto *h1 = dynamic_cast<const CGHeroInstance*>(o1);
-			const auto *h2 = dynamic_cast<const CGHeroInstance*>(o2);
-
-			// two heroes in same town (garrisoned and visiting)
-			if (h1->getVisitedTown() != nullptr && h2->getVisitedTown() != nullptr && h1->getVisitedTown() == h2->getVisitedTown())
-				return true;
-		}
-
-		// Ongoing garrison exchange
-		const auto * dialog = queries->findQuery<CGarrisonDialogQuery>(
-			[o1, o2](const CGarrisonDialogQuery & query)
-			{
-				const auto * topArmy = query.exchangingArmies.at(0);
-				const auto * bottomArmy = query.exchangingArmies.at(1);
-
-				return (topArmy == o1 && bottomArmy == o2) || (topArmy == o2 && bottomArmy == o1);
-			});
-
-		if(dialog)
+		// two heroes in same town (garrisoned and visiting)
+		if (h1->getVisitedTown() != nullptr && h2->getVisitedTown() != nullptr && h1->getVisitedTown() == h2->getVisitedTown())
 			return true;
 	}
 
@@ -3757,8 +3748,6 @@ void CGameHandler::objectVisited(const CGObjectInstance * visitedObject, const C
 		throw std::runtime_error("Can not visit object that is being visited");
 	}
 
-	std::shared_ptr<MapObjectVisitQuery> visitQuery;
-
 	if(visitedObject->ID == Obj::HERO)
 	{
 		const auto * visitedHero = dynamic_cast<const CGHeroInstance *>(visitedObject);
@@ -3766,32 +3755,16 @@ void CGameHandler::objectVisited(const CGObjectInstance * visitedObject, const C
 
 		if(visitedTown)
 		{
-			const bool isEnemy = visitedHero->getOwner() != h->getOwner();
+			const bool isEnemy = gameInfo().getPlayerRelations(visitedHero->getOwner(), h->getOwner()) == PlayerRelations::ENEMIES;
 
 			if(isEnemy && !visitedTown->isBattleOutsideTown(visitedHero))
 				visitedObject = visitedTown;
 		}
 	}
-	visitQuery = std::make_shared<MapObjectVisitQuery>(this, visitedObject, h);
-	queries->addQuery(visitQuery); //TODO real visit pos
 
-	HeroVisit hv;
-	hv.objId = visitedObject->id;
-	hv.heroId = h->id;
-	hv.player = h->tempOwner;
-	hv.starting = true;
-	sendAndApply(hv);
-
-	std::string scriptHandler = visitedObject->getVisitScriptHandler();
-	auto * dispatcher = gameState().getMapEventDispatcher();
-	if(!scriptHandler.empty() && dispatcher)
-		runScriptedEvent(*dispatcher, h->getOwner(), h->id,
-			[&](scripting::MapEventDispatcher & d){ return d.onObjectVisit(*this, scriptHandler, visitedObject, h); });
-	else
-		visitedObject->onHeroVisit(*this, h);
-
-	if(visitQuery)
-		queries->popIfTop(visitQuery); //visit ends here if no queries were created
+	// The visit runs as a routine: it starts the visit, passes control to the object, and
+	// finishes once the object and everything that it started are done.
+	activities->addActivity(std::make_shared<MapObjectVisitActivity>(this, visitedObject, h)); //TODO real visit pos
 }
 
 void CGameHandler::objectVisitEnded(const ObjectInstanceID & heroObjectID, PlayerColor player)
@@ -3839,7 +3812,7 @@ void CGameHandler::checkVictoryLossConditions(const std::set<PlayerColor> & play
 {
 	for (auto playerColor : playerColors)
 	{
-		if (gameInfo().getPlayerState(playerColor, false))
+		if (gameInfo().tryGetPlayerState(playerColor))
 			checkVictoryLossConditionsForPlayer(playerColor);
 	}
 }
@@ -3856,12 +3829,12 @@ void CGameHandler::checkVictoryLossConditionsForAll()
 
 void CGameHandler::checkVictoryLossConditionsForPlayer(PlayerColor player)
 {
-	const PlayerState * p = gameInfo().getPlayerState(player);
+	const PlayerState * p = gameInfo().tryGetPlayerState(player);
 
 	if(!p || p->status != EPlayerStatus::INGAME)
 		return;
 
-	if(queries->topQuery(player))
+	if(activities->topActivity(player))
 		return;
 
 	if(gameState().getMap().battleOnly)
@@ -4028,14 +4001,9 @@ bool CGameHandler::dig(const CGHeroInstance *h)
 
 void CGameHandler::visitObjectOnTile(const TerrainTile &t, const CGHeroInstance * h)
 {
-	if (!t.visitableObjects.empty())
-	{
-		//to prevent self-visiting heroes on space press
-		if (t.visitableObjects.back() != h->id)
-			objectVisited(gameState().getObjInstance(t.visitableObjects.back()), h);
-		else if (t.visitableObjects.size() > 1)
-			objectVisited(gameState().getObjInstance(*(t.visitableObjects.end()-2)),h);
-	}
+	const ObjectInstanceID objectID = t.objectVisitedBy(h->id);
+	if (objectID.hasValue())
+		objectVisited(gameState().getObjInstance(objectID), h);
 }
 
 bool CGameHandler::sacrificeCreatures(const IMarket * market, const CGHeroInstance * hero, const std::vector<SlotID> & slot, const std::vector<ui32> & count)
@@ -4053,7 +4021,7 @@ bool CGameHandler::sacrificeCreatures(const IMarket * market, const CGHeroInstan
 	{
 		int oldCount = hero->getStackCount(slot[i]);
 
-		if(oldCount < static_cast<int>(count[i]))
+		if(count[i] == 0 || static_cast<ui32>(oldCount) < count[i])
 		{
 			finish();
 			COMPLAIN_RET("Not enough creatures to sacrifice!")
@@ -4129,13 +4097,13 @@ bool CGameHandler::sacrificeArtifact(const IMarket * market, const CGHeroInstanc
 
 bool CGameHandler::insertNewStack(const StackLocation &sl, const CCreature *c, TQuantity count)
 {
-	const auto * army = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(sl.army));
+	const auto * army = getArmyOrThrow(sl.army, "insertNewStack");
 
-	if (army->hasStackAtSlot(sl.slot))
-		COMPLAIN_RET("Slot is already taken!");
+	if (!sl.slot.validSlot() || army->hasStackAtSlot(sl.slot))
+		throw std::runtime_error("insertNewStack: slot " + std::to_string(sl.slot.getNum()) + " of " + army->describeArmy() + " is not available");
 
-	if (!sl.slot.validSlot())
-		COMPLAIN_RET("Cannot insert stack to that slot!");
+	if (!c || count <= 0)
+		throw std::runtime_error("insertNewStack: can not insert " + std::to_string(count) + " units into " + army->describeArmy());
 
 	InsertNewStack ins;
 	ins.army = army->id;
@@ -4148,10 +4116,10 @@ bool CGameHandler::insertNewStack(const StackLocation &sl, const CCreature *c, T
 
 bool CGameHandler::eraseStack(const StackLocation &sl, bool forceRemoval)
 {
-	const auto * army = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(sl.army));
+	const auto * army = getArmyOrThrow(sl.army, "eraseStack");
 
 	if (!army->hasStackAtSlot(sl.slot))
-		COMPLAIN_RET("Cannot find a stack to erase");
+		throw std::runtime_error("eraseStack: " + army->describeArmy() + " has no stack at slot " + std::to_string(sl.slot.getNum()));
 
 	if (army->stacksCount() == 1 //from the last stack
 		&& army->needsLastStack() //that must be left
@@ -4169,19 +4137,22 @@ bool CGameHandler::eraseStack(const StackLocation &sl, bool forceRemoval)
 
 bool CGameHandler::changeStackCount(const StackLocation &sl, TQuantity count, ChangeValueMode mode)
 {
-	const auto * army = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(sl.army));
+	const auto * army = getArmyOrThrow(sl.army, "changeStackCount");
+
+	if (!army->hasStackAtSlot(sl.slot))
+		throw std::runtime_error("changeStackCount: " + army->describeArmy() + " has no stack at slot " + std::to_string(sl.slot.getNum()));
 
 	TQuantity currentCount = army->getStackCount(sl.slot);
 	if ((mode == ChangeValueMode::ABSOLUTE && count < 0)
 		|| (mode == ChangeValueMode::RELATIVE && -count > currentCount))
 	{
-		COMPLAIN_RET("Cannot take more stacks than present!");
+		throw std::runtime_error("changeStackCount: cannot set " + std::to_string(currentCount) + " units at slot " + std::to_string(sl.slot.getNum()) + " of " + army->describeArmy() + " to " + std::to_string(count));
 	}
 
 	if ((currentCount == -count  &&  mode == ChangeValueMode::RELATIVE)
 	   || (count == 0 && mode == ChangeValueMode::ABSOLUTE))
 	{
-		eraseStack(sl);
+		return eraseStack(sl);
 	}
 	else
 	{
@@ -4197,18 +4168,16 @@ bool CGameHandler::changeStackCount(const StackLocation &sl, TQuantity count, Ch
 
 bool CGameHandler::addToSlot(const StackLocation &sl, const CCreature *c, TQuantity count)
 {
-	const auto * army = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(sl.army));
+	const auto * army = getArmyOrThrow(sl.army, "addToSlot");
 
 	const CCreature *slotC = army->getCreature(sl.slot);
 	if (!slotC) //slot is empty
-		insertNewStack(sl, c, count);
-	else if (c == slotC)
-		changeStackCount(sl, count, ChangeValueMode::RELATIVE);
-	else
-	{
-		COMPLAIN_RET("Cannot add " + c->getNamePluralTranslated() + " to slot " + std::to_string(sl.slot.getNum()) + "!");
-	}
-	return true;
+		return insertNewStack(sl, c, count);
+
+	if (c != slotC)
+		throw std::runtime_error("addToSlot: cannot add " + c->getJsonKey() + " to slot " + std::to_string(sl.slot.getNum()) + " of " + army->describeArmy() + " that has " + slotC->getJsonKey());
+
+	return changeStackCount(sl, count, ChangeValueMode::RELATIVE);
 }
 
 void CGameHandler::tryJoiningArmy(const CArmedInstance *src, const CArmedInstance *dst, bool removeObjWhenFinished, bool allowMerging)
@@ -4236,7 +4205,7 @@ void CGameHandler::tryJoiningArmy(const CArmedInstance *src, const CArmedInstanc
 				}
 			}
 		}
-		showGarrisonDialog(src->id, dst->id, true, MetaString()); //show garrison window and optionally remove ourselves from map when player ends
+		showGarrisonDialog(src->id, dst->id, MetaString()); //show garrison window and optionally remove ourselves from map when player ends
 	}
 	else //merge
 	{
@@ -4246,22 +4215,29 @@ void CGameHandler::tryJoiningArmy(const CArmedInstance *src, const CArmedInstanc
 
 bool CGameHandler::moveStack(const StackLocation &src, const StackLocation &dst, TQuantity count)
 {
-	const auto * srcArmy = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(src.army));
-	const auto * dstArmy = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(dst.army));
+	const auto * srcArmy = getArmyOrThrow(src.army, "moveStack");
+	const auto * dstArmy = getArmyOrThrow(dst.army, "moveStack");
+
+	const auto describe = [&](const std::string & problem)
+	{
+		return "moveStack: " + std::to_string(count) + " units from slot " + std::to_string(src.slot.getNum()) + " of " + srcArmy->describeArmy()
+			+ " to slot " + std::to_string(dst.slot.getNum()) + " of " + dstArmy->describeArmy() + ": " + problem;
+	};
 
 	if (!srcArmy->hasStackAtSlot(src.slot))
-		COMPLAIN_RET("No stack to move!");
+		throw std::runtime_error(describe("no stack to move"));
+
+	if (!dst.slot.validSlot() || (srcArmy == dstArmy && src.slot == dst.slot))
+		throw std::runtime_error(describe("invalid destination"));
 
 	if (dstArmy->hasStackAtSlot(dst.slot) && dstArmy->getCreature(dst.slot) != srcArmy->getCreature(src.slot))
-		COMPLAIN_RET("Cannot move: stack of different type at destination pos!");
-
-	if (!dst.slot.validSlot())
-		COMPLAIN_RET("Cannot move stack to that slot!");
+		throw std::runtime_error(describe("stack of different type at destination"));
 
 	if (count == -1)
-	{
 		count = srcArmy->getStackCount(src.slot);
-	}
+
+	if (count <= 0 || count > srcArmy->getStackCount(src.slot))
+		throw std::runtime_error(describe("invalid amount"));
 
 	if (srcArmy != dstArmy  //moving away
 		&&  count == srcArmy->getStackCount(src.slot) //all creatures
@@ -4305,8 +4281,11 @@ void CGameHandler::castSpell(const spells::Caster * caster, SpellID spellID, con
 
 bool CGameHandler::swapStacks(const StackLocation & sl1, const StackLocation & sl2)
 {
-	const auto * army1 = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(sl1.army));
-	const auto * army2 = dynamic_cast<const CArmedInstance*>(gameInfo().getObj(sl2.army));
+	const auto * army1 = getArmyOrThrow(sl1.army, "swapStacks");
+	const auto * army2 = getArmyOrThrow(sl2.army, "swapStacks");
+
+	if (army1 == army2 && sl1.slot == sl2.slot)
+		throw std::runtime_error("swapStacks: cannot swap slot " + std::to_string(sl1.slot.getNum()) + " of " + army1->describeArmy() + " with itself");
 
 	if(!army1->hasStackAtSlot(sl1.slot))
 	{
@@ -4388,8 +4367,12 @@ bool CGameHandler::giveHeroNewArtifact(
 	if(pos == ArtifactPosition::FIRST_AVAILABLE)
 	{
 		na.pos = ArtifactUtils::getArtAnyPosition(h, artType->getId());
+		// e.g. rewarded war machine that hero already has - lost, like grail in battle loot
 		if(!artType->canBePutAt(h, na.pos))
-			COMPLAIN_RET("Cannot put artifact in that slot!");
+		{
+			logGlobal->debug("Hero %s has no slot for artifact %s, artifact is lost", h->getNameTextID(), artType->getJsonKey());
+			return false;
+		}
 	}
 	else if(ArtifactUtils::isSlotBackpack(pos))
 	{
@@ -4437,7 +4420,7 @@ void CGameHandler::spawnWanderingMonsters(CreatureID creatureID)
 	}
 }
 
-bool CGameHandler::isBlockedByQueries(const CPackForServer *pack, PlayerColor player)
+bool CGameHandler::isBlockedByActivities(const CPackForServer *pack, PlayerColor player)
 {
 	if(!player.isValidPlayer())
 		return false;
@@ -4448,16 +4431,13 @@ bool CGameHandler::isBlockedByQueries(const CPackForServer *pack, PlayerColor pl
 	if (dynamic_cast<const SaveLocalState *>(pack) != nullptr)
 		return false;
 
-	if(dynamic_cast<const AdvInterfaceReady *>(pack) != nullptr)
-		return false;
-
-	auto query = queries->topQuery(player);
-	if (query && query->blocksPack(pack))
+	auto activity = activities->topActivity(player);
+	if (activity && activity->blocksPack(pack))
 	{
 		complain(boost::str(boost::format(
-			"\r\n| Player \"%s\" has to answer queries before attempting any further actions.\r\n| Top Query: \"%s\"\r\n")
+			"\r\n| Player \"%s\" has to answer activities before attempting any further actions.\r\n| Top Activity: \"%s\"\r\n")
 			% boost::to_upper_copy<std::string>(player.toString())
-			% query->toString()
+			% activity->toString()
 		));
 		return true;
 	}
@@ -4467,23 +4447,12 @@ bool CGameHandler::isBlockedByQueries(const CPackForServer *pack, PlayerColor pl
 
 void CGameHandler::removeAfterVisit(const ObjectInstanceID & id)
 {
-	//If the object is being visited, there must be a matching query
-	for (const auto &query : queries->allQueries())
-	{
-		auto * someVisitQuery = queries->queryAs<MapObjectVisitQuery>(query);
+	//If the object is being visited, there must be a matching activity
+	auto * visit = activities->findVisit(id);
+	if(!visit)
+		throw std::runtime_error("This function needs to be called during the object visit!");
 
-		if(!someVisitQuery)
-			continue;
-
-		if(someVisitQuery->visitedObject == id)
-		{
-			someVisitQuery->removeObjectAfterVisit = true;
-			return;
-		}
-	}
-
-	//If we haven't returned so far, there is no query and no visit, call was wrong
-	throw std::runtime_error("This function needs to be called during the object visit!");
+	visit->removeObjectAfterVisit = true;
 }
 
 void CGameHandler::changeFogOfWar(int3 center, ui32 radius, PlayerColor player, ETileVisibility mode)
@@ -4531,48 +4500,8 @@ const CGHeroInstance * CGameHandler::getVisitingHero(const CGObjectInstance *obj
 {
 	assert(obj);
 
-	for(const auto & query : queries->allQueries())
-	{
-		const auto * visit = dynamic_cast<VisitQuery *>(query.get());
-		if(!visit)
-			continue;
-
-		if(visit->visitedObject == obj->id)
-			return gameInfo().getHero(visit->visitingHero);
-	}
-	return nullptr;
-}
-
-const CGObjectInstance * CGameHandler::getVisitingObject(const CGHeroInstance *hero)
-{
-	assert(hero);
-
-	for(const auto & query : queries->allQueries())
-	{
-		const auto * visit = dynamic_cast<VisitQuery *>(query.get());
-		if(!visit)
-			continue;
-
-		if(visit->visitingHero == hero->id)
-			return gameInfo().getObjInstance(visit->visitedObject);
-	}
-	return nullptr;
-}
-
-bool CGameHandler::isVisitCoveredByAnotherQuery(const CGObjectInstance *obj, const CGHeroInstance *hero)
-{
-	assert(obj);
-	assert(hero);
-	assert(getVisitingHero(obj) == hero);
-	// Check top query of targeted player:
-	// If top query is NOT visit to targeted object then we assume that
-	// visitation query is covered by other query that must be answered first
-
-	if(const auto & topQuery = queries->topQuery(hero->getOwner()))
-		if(const auto * visit =  dynamic_cast<VisitQuery *>(topQuery.get()))
-			return !(visit->visitedObject == obj->id && visit->visitingHero == hero->id);
-
-	return true;
+	const auto * visit = activities->findVisit(obj->id);
+	return visit ? gameInfo().getHero(visit->visitingHero) : nullptr;
 }
 
 void CGameHandler::setObjPropertyValue(ObjectInstanceID objid, ObjProperty prop, int32_t value)

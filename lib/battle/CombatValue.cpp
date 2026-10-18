@@ -19,7 +19,7 @@
 #include "../IGameSettings.h"
 #include "../bonuses/Bonus.h"
 #include "../bonuses/BonusParameters.h"
-#include "../mapObjects/CGHeroInstance.h"
+#include "../gameState/InfoAboutArmy.h"
 #include "../modding/IdentifierStorage.h"
 #include "../modding/ModScope.h"
 #include "../spells/CSpellHandler.h"
@@ -47,7 +47,7 @@ static bool castsAtEnemies(const IBonusBearer * unit)
 		return true;
 
 	// most creature casters only buff their own side, so enemy magic defenses do not apply
-	for(const auto & bonus : *unit->getBonusesOfType(BonusType::SPELLCASTER))
+	for(const auto matchingBonuses = unit->getBonusesOfType(BonusType::SPELLCASTER); const auto & bonus : *matchingBonuses)
 	{
 		const auto spell = bonus->subtype.as<SpellID>();
 
@@ -59,19 +59,13 @@ static bool castsAtEnemies(const IBonusBearer * unit)
 }
 
 /// Magic that a hero brings to a battle, from the spell power of its casts and the mana paying for them
-static double magicOf(const CGHeroInstance * hero)
+static double magicOf(const InfoAboutHero & hero)
 {
-	if(!hero || !hero->hasSpellbook())
+	if(!hero.details)
 		return 0;
 
-	const bool knowsCombatSpell = std::ranges::any_of(hero->getSpellsInSpellbook(),
-		[](const SpellID & spell) { return spell.toSpell()->isCombat(); });
-
-	if(!knowsCombatSpell)
-		return 0;
-
-	const double spellPower = hero->getPrimSkillLevel(PrimarySkill::SPELL_POWER);
-	const double mana = std::max(0, hero->mana);
+	const double spellPower = hero.details->primskills.at(PrimarySkill::SPELL_POWER.getNum());
+	const double mana = std::max(0, hero.details->mana);
 
 	// mana pays for the casts and spell power decides what each one does, so neither is worth anything alone
 	const double strength = spellPower * mana / (referenceSpellPower * referenceMana);
@@ -153,7 +147,7 @@ CombatValueContext CombatValueContext::against(const CBattleInfoCallback & battl
 
 	CombatValueContext result;
 	result.meleeShare = melee / total;
-	result.magicPower = magicOf(battle.battleGetFightingHero(CBattleInfoEssentials::otherSide(side)))
+	result.magicPower = magicOf(battle.battleGetHeroInfo(CBattleInfoEssentials::otherSide(side)))
 		+ creatureMagicWeight * casters / total;
 
 	for(size_t mastery = 0; mastery < kings.size(); ++mastery)
@@ -244,7 +238,7 @@ static double lastingValue(const IBonusBearer * unit, BonusType type)
 {
 	double total = 0;
 
-	for(const auto & bonus : *unit->getBonusesOfType(type))
+	for(const auto matchingBonuses = unit->getBonusesOfType(type); const auto & bonus : *matchingBonuses)
 		total += bonus->val * durationWeight(*bonus);
 
 	return total;
@@ -254,7 +248,7 @@ static double lastingValue(const IBonusBearer * unit, BonusType type, const Bonu
 {
 	double total = 0;
 
-	for(const auto & bonus : *unit->getBonusesOfType(type, subtype))
+	for(const auto matchingBonuses = unit->getBonusesOfType(type, subtype); const auto & bonus : *matchingBonuses)
 		total += bonus->val * durationWeight(*bonus);
 
 	return total;
@@ -266,7 +260,8 @@ static double expiringSkill(const IBonusBearer * unit, PrimarySkill skill)
 {
 	double total = 0;
 
-	for(const auto & bonus : *unit->getBonusesOfType(BonusType::PRIMARY_SKILL, BonusSubtypeID(skill)))
+	for(const auto matchingBonuses = unit->getBonusesOfType(BonusType::PRIMARY_SKILL, BonusSubtypeID(skill));
+		const auto & bonus : *matchingBonuses)
 		total += bonus->val * (1.0 - durationWeight(*bonus));
 
 	return total;
@@ -277,7 +272,7 @@ static double lastingPresence(const IBonusBearer * unit, BonusType type)
 {
 	double longest = 0;
 
-	for(const auto & bonus : *unit->getBonusesOfType(type))
+	for(const auto matchingBonuses = unit->getBonusesOfType(type); const auto & bonus : *matchingBonuses)
 		longest = std::max(longest, durationWeight(*bonus));
 
 	return longest;
@@ -413,7 +408,7 @@ double CombatValue::valueOf(const ACreature & creature, double uptime, int count
 	attackBonus += lastingValue(bonuses, BonusType::IN_FRENZY) / 100.0 * creature.getDefense(false);
 
 	// slayer adds attack only against KING units that its mastery level can target
-	for(const auto & bonus : *bonuses->getBonusesOfType(BonusType::SLAYER))
+	for(const auto matchingBonuses = bonuses->getBonusesOfType(BonusType::SLAYER); const auto & bonus : *matchingBonuses)
 	{
 		const size_t mastery = bonus->parameters
 			? std::clamp<size_t>(bonus->parameters->toNumber(), 0, context.kingShare.size() - 1)
@@ -615,7 +610,7 @@ double CombatValue::offenseMultiplier(const ACreature & creature)
 	// spell, so it is priced at the same level as an ability that belongs to no school
 	int bestSpellLevel = 0;
 	for(auto type : {BonusType::SPELLCASTER, BonusType::RANDOM_SPELLCASTER})
-		for(const auto & bonus : *unit->getBonusesOfType(type))
+		for(const auto matchingBonuses = unit->getBonusesOfType(type); const auto & bonus : *matchingBonuses)
 			bestSpellLevel = std::max(bestSpellLevel, spellLevelOf(bonus->subtype));
 
 	result *= 1.0 + castWeight * bestSpellLevel;
@@ -629,7 +624,7 @@ double CombatValue::offenseMultiplier(const ACreature & creature)
 	double rest = 0;
 	for(auto type : {BonusType::SPELL_AFTER_ATTACK, BonusType::SPELL_BEFORE_ATTACK})
 	{
-		for(const auto & bonus : *unit->getBonusesOfType(type))
+		for(const auto matchingBonuses = unit->getBonusesOfType(type); const auto & bonus : *matchingBonuses)
 		{
 			const double landed = std::sqrt(std::clamp(bonus->val, 0, 100) / 100.0) * spellLevelOf(bonus->subtype);
 
@@ -645,7 +640,8 @@ double CombatValue::offenseMultiplier(const ACreature & creature)
 	if(unit->hasBonusOfType(BonusType::HEALER))
 		result *= 1.10;
 
-	for(const auto & bonus : *unit->getBonusesOfType(BonusType::COMBAT_EVENT_TRIGGER))
+	for(const auto matchingBonuses = unit->getBonusesOfType(BonusType::COMBAT_EVENT_TRIGGER);
+		const auto & bonus : *matchingBonuses)
 	{
 		const double weight = combatScriptWeight(bonus->subtype);
 
@@ -755,7 +751,7 @@ double CombatValue::situationalOffense(const ACreature & creature, const CombatV
 
 	// attacker decides whether to break the disable, so assume it lasts its full duration
 	double disabled = 0;
-	for(const auto & bonus : *unit->getBonusesOfType(BonusType::NOT_ACTIVE))
+	for(const auto matchingBonuses = unit->getBonusesOfType(BonusType::NOT_ACTIVE); const auto & bonus : *matchingBonuses)
 		disabled = std::max(disabled, turnsWeight(*bonus));
 
 	result *= 1.0 - 0.5 * disabled;

@@ -83,21 +83,21 @@ struct DLL_LINKAGE PackageApplied : public CPackForClient
 	}
 };
 
-struct DLL_LINKAGE QueryResolved : public CPackForClient
+struct DLL_LINKAGE QuestionResolved : public CPackForClient
 {
-	QueryResolved() = default;
-	explicit QueryResolved(QueryID queryID)
-		: queryID(queryID)
+	QuestionResolved() = default;
+	explicit QuestionResolved(QuestionID questionID)
+		: questionID(questionID)
 	{
 	}
 
 	void visitTyped(ICPackVisitor & visitor) override;
 
-	QueryID queryID = QueryID::NONE;
+	QuestionID questionID = QuestionID::NONE;
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 	}
 };
 
@@ -143,6 +143,21 @@ struct DLL_LINKAGE SystemMessage : public CPackForClient
 	template <typename Handler> void serialize(Handler & h)
 	{
 		h & text;
+	}
+};
+
+/// Notification about players that are playing their turns simultaneously without contact yet.
+/// Such players can not interact with objects owned by each other (see TurnOrderProcessor on server)
+struct DLL_LINKAGE SimturnsContactStatus : public CPackForClient
+{
+	/// pairs of players that are still playing simultaneous turns and have not yet made contact
+	std::set<std::pair<PlayerColor, PlayerColor>> blockedContacts;
+
+	void visitTyped(ICPackVisitor & visitor) override;
+
+	template <typename Handler> void serialize(Handler & h)
+	{
+		h & blockedContacts;
 	}
 };
 
@@ -202,7 +217,7 @@ struct DLL_LINKAGE TurnTimeUpdate : public CPackForClient
 	}
 };
 
-struct DLL_LINKAGE PlayerStartsTurn : public Query
+struct DLL_LINKAGE PlayerStartsTurn : public Question
 {
 	PlayerColor player;
 
@@ -210,7 +225,7 @@ struct DLL_LINKAGE PlayerStartsTurn : public Query
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & player;
 	}
 };
@@ -841,7 +856,7 @@ struct DLL_LINKAGE GiveHero : public CPackForClient
 	}
 };
 
-struct DLL_LINKAGE OpenWindow : public Query
+struct DLL_LINKAGE OpenWindow : public Question
 {
 	EOpenWindowMode window;
 	ObjectInstanceID object;
@@ -851,7 +866,7 @@ struct DLL_LINKAGE OpenWindow : public Query
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & window;
 		h & object;
 		h & visitor;
@@ -1345,48 +1360,52 @@ struct DLL_LINKAGE ChangeArtifactsCostume : public CPackForClient
 	}
 };
 
-struct DLL_LINKAGE HeroLevelUp : public Query
+struct DLL_LINKAGE HeroLevelUp : public Question
 {
 	PlayerColor player;
 	ObjectInstanceID heroId;
 
 	PrimarySkill primskill = PrimarySkill::ATTACK;
 	std::vector<SecondarySkill> skills;
+	bool moreLevelsFollow = false; ///< hero gains another level after this one, so its window can stay open
 
 	void visitTyped(ICPackVisitor & visitor) override;
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & player;
 		h & heroId;
 		h & primskill;
 		h & skills;
+		h & moreLevelsFollow;
 	}
 };
 
-struct DLL_LINKAGE CommanderLevelUp : public Query
+struct DLL_LINKAGE CommanderLevelUp : public Question
 {
 	PlayerColor player;
 	ObjectInstanceID heroId;
 
 	std::vector<ui32> skills; //0-5 - secondary skills, val-100 - special skill
+	bool moreLevelsFollow = false; ///< commander gains another level after this one, so its window can stay open
 
 	void visitTyped(ICPackVisitor & visitor) override;
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & player;
 		h & heroId;
 		h & skills;
+		h & moreLevelsFollow;
 	}
 };
 
 //A dialog that requires making decision by player - it may contain components to choose between or has yes/no options
-//Client responds with QueryReply, where answer: 0 - cancel pressed, choice doesn't matter; 1/2/...  - first/second/... component selected and OK pressed
+//Client responds with QuestionAnswer, where answer: 0 - cancel pressed, choice doesn't matter; 1/2/...  - first/second/... component selected and OK pressed
 //Until sending reply player won't be allowed to take any actions
-struct DLL_LINKAGE BlockingDialog : public Query
+struct DLL_LINKAGE BlockingDialog : public Question
 {
 	enum { ALLOW_CANCEL = 1, SELECTION = 2, SAFE_TO_AUTOACCEPT = 4 };
 	MetaString text;
@@ -1420,7 +1439,7 @@ struct DLL_LINKAGE BlockingDialog : public Query
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & text;
 		h & components;
 		h & player;
@@ -1429,27 +1448,30 @@ struct DLL_LINKAGE BlockingDialog : public Query
 	}
 };
 
-struct DLL_LINKAGE GarrisonDialog : public Query
+struct DLL_LINKAGE GarrisonDialog : public Question
 {
 	ObjectInstanceID objid;
 	ObjectInstanceID hid;
-	bool removableUnits = false;
 	MetaString customTitle;
 
 	void visitTyped(ICPackVisitor & visitor) override;
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & objid;
 		h & hid;
-		h & removableUnits;
+		if (!h.hasFeature(Handler::Version::GARRISON_DIALOG_REMOVABLE_UNITS_REMOVED))
+		{
+			bool removableUnits = false;
+			h & removableUnits;
+		}
 		if (h.hasFeature(Handler::Version::CUSTOM_GARRISON_TITLE))
 			h & customTitle;
 	}
 };
 
-struct DLL_LINKAGE ExchangeDialog : public Query
+struct DLL_LINKAGE ExchangeDialog : public Question
 {
 	PlayerColor player;
 
@@ -1460,14 +1482,14 @@ struct DLL_LINKAGE ExchangeDialog : public Query
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & player;
 		h & hero1;
 		h & hero2;
 	}
 };
 
-struct DLL_LINKAGE TeleportDialog : public Query
+struct DLL_LINKAGE TeleportDialog : public Question
 {
 	TeleportDialog() = default;
 
@@ -1485,7 +1507,7 @@ struct DLL_LINKAGE TeleportDialog : public Query
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & hero;
 		h & channel;
 		h & exits;
@@ -1493,7 +1515,7 @@ struct DLL_LINKAGE TeleportDialog : public Query
 	}
 };
 
-struct DLL_LINKAGE MapObjectSelectDialog : public Query
+struct DLL_LINKAGE MapObjectSelectDialog : public Question
 {
 	PlayerColor player;
 	Component icon;
@@ -1505,7 +1527,7 @@ struct DLL_LINKAGE MapObjectSelectDialog : public Query
 
 	template <typename Handler> void serialize(Handler & h)
 	{
-		h & queryID;
+		h & questionID;
 		h & player;
 		h & icon;
 		h & title;

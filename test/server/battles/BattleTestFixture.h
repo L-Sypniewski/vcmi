@@ -19,10 +19,11 @@
 #include "../../../lib/constants/EntityIdentifiers.h"
 #include "../../../lib/networkPacks/PacksForClientBattle.h"
 
-VCMI_LIB_NAMESPACE_BEGIN
+class BattleAction;
+class CArmedInstance;
 class CGHeroInstance;
-VCMI_LIB_NAMESPACE_END
-
+class CGTownInstance;
+struct SpellCreatedObstacle;
 class CGameHandler;
 
 /// Everything one spell cast produced, as the clients see it.
@@ -41,6 +42,8 @@ class RecordingGameServer : public IGameServer
 public:
 	std::shared_ptr<CGameState> gameState;
 	std::vector<RecordedCast> casts;
+	std::vector<CatapultAttack> catapultAttacks;
+	std::vector<BattleResult> battleResults;
 
 	void setState(EServerState value) override { state = value; }
 	EServerState getState() const override { return state; }
@@ -79,6 +82,8 @@ public:
 	void startGame();
 	/// Sand is native to no faction, so by default no unit gets the native terrain bonus
 	void startBattle(TerrainId terrain = ETerrainId::SAND);
+	/// Same as startBattle, but the defender is a town with a fort and no hero, so the battlefield has walls.
+	void startSiege();
 	/// Ends the tactics phase, which fires the battle-start triggers and activates the first
 	/// stack. Call once every unit a scenario needs is on the field.
 	void beginCombat();
@@ -106,6 +111,21 @@ public:
 	void makeClone(CStack * stack);
 	/// Executes a creature spell action; an invalid hex creates an empty target
 	bool castAsUnit(const CStack * caster, const SpellID & spellID, const BattleHex & targetHex = BattleHex());
+	/// Submits the action as the player of its side, making the stack it names the active one.
+	bool act(const BattleAction & action);
+
+	/// Hidden quicksand of the defender, which stops a unit that walks into it.
+	void addQuicksand(const BattleHex & hex);
+	/// Castle moat, which stops a unit that walks into it and damages a unit that acts inside it.
+	void addMoat(const BattleHex & hex);
+	void addForceField(const BattleHex & hex);
+
+	/// Takes health from the stack, killing it when the damage covers all it has.
+	void injure(const CStack * stack, int64_t damage);
+	/// Gives the hero a spellbook, the spell, and mana to cast it.
+	void teachSpell(CGHeroInstance * hero, SpellID spell);
+	/// Lets the unit cast `spell` once, at the given level, through `ability` - SPELLCASTER or ADJACENT_SPELLCASTER.
+	static void grantSpell(CStack * unit, BonusType ability, SpellID spell, int level);
 	/// Waits out the current round with every unit defending, leaving the battle in the next one.
 	void endRound();
 
@@ -134,8 +154,9 @@ public:
 protected:
 	/// A battle runs real game logic, which the mocked services cannot answer.
 	Services * gameServices() override;
-	void configurePlayer(PlayerSettings & settings) const override;
 
 private:
 	static void makeNeutral(CGHeroInstance * hero);
+	void setupBattle(BattleSideArray<const CGHeroInstance *> heroes, BattleSideArray<const CArmedInstance *> armies, const CGTownInstance * town, TerrainId terrain);
+	void addObstacle(SpellCreatedObstacle & obstacle);
 };

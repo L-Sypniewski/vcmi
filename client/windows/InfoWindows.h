@@ -39,7 +39,7 @@ class CInfoWindow : public WindowBase
 public:
 	using TButtonsInfo = std::vector<std::pair<AnimationPath, CFunctionList<void()>>>;
 	using TCompsInfo = std::vector<std::shared_ptr<CComponent>>;
-	QueryID ID; //for identification
+	QuestionID ID; //for identification
 	std::shared_ptr<CFilledTexture> backgroundTexture;
 	std::shared_ptr<CTextBox> text;
 	std::shared_ptr<CComponentBox> components;
@@ -62,7 +62,8 @@ public:
 
 	//use only before the game starts! (showYesNoDialog in GAME->interface() must be used then)
 	static void showInfoDialog(const std::string & text, const TCompsInfo & components, PlayerColor player = PlayerColor(1));
-	static void showYesNoDialog(const std::string & text, const TCompsInfo & components, const CFunctionList<void()> & onYes, const CFunctionList<void()> & onNo, PlayerColor player = PlayerColor(1), uint32_t timeoutMs = 0);
+	/// questionID must be set when this dialog is an answer to a question asked by server, so that this window does not get closed without answering
+	static void showYesNoDialog(const std::string & text, const TCompsInfo & components, const CFunctionList<void()> & onYes, const CFunctionList<void()> & onNo, PlayerColor player = PlayerColor(1), uint32_t timeoutMs = 0, QuestionID questionID = QuestionID::NONE);
 	static std::shared_ptr<CInfoWindow> create(const std::string & text, PlayerColor playerID = PlayerColor(1), const TCompsInfo & components = TCompsInfo());
 
 	/// create text from title and description: {title}\n\n description
@@ -125,7 +126,7 @@ class CSelWindow : public CInfoWindow
 public:
 	void madeChoice(); //looks for selected component and calls callback
 	void madeChoiceAndClose();
-	CSelWindow(const std::string & text, PlayerColor player, int charperline, const std::vector<std::shared_ptr<CSelectableComponent>> & comps, const std::vector<std::pair<AnimationPath,CFunctionList<void()> > > &Buttons, QueryID askID);
+	CSelWindow(const std::string & text, PlayerColor player, int charperline, const std::vector<std::shared_ptr<CSelectableComponent>> & comps, const std::vector<std::pair<AnimationPath,CFunctionList<void()> > > &Buttons, QuestionID questionID);
 };
 
 class MinimapWithIcons : public CIntObject

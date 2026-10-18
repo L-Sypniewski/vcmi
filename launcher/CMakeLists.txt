@@ -7,6 +7,8 @@ endif()
 set(launcher_SRCS
 		StdInc.cpp
 		aboutProject/aboutproject_moc.cpp
+		aboutProject/dataexporter.cpp
+		aboutProject/deviceinfo.cpp
 		modManager/cdownloadmanager_moc.cpp
 		modManager/modstateitemmodel_moc.cpp
 		modManager/cmodlistview_moc.cpp
@@ -48,6 +50,7 @@ endif()
 set(launcher_HEADERS
 		StdInc.h
 		aboutProject/aboutproject_moc.h
+		aboutProject/deviceinfo.h
 		modManager/cdownloadmanager_moc.h
 		modManager/modstateitemmodel_moc.h
 		modManager/cmodlistview_moc.h
@@ -268,7 +271,7 @@ if(ENABLE_STATIC_LIBS OR NOT (ENABLE_EDITOR AND ENABLE_LAUNCHER))
 	target_compile_definitions(vcmilauncher PRIVATE VCMIQT_STATIC)
 endif()
 
-target_link_libraries(vcmilauncher vcmi vcmiqt Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Network)
+target_link_libraries(vcmilauncher vcmi vcmiqt Qt${QT_VERSION_MAJOR}::Widgets)
 target_include_directories(vcmilauncher
 	PUBLIC	${CMAKE_CURRENT_SOURCE_DIR}
 )

@@ -18,6 +18,7 @@
 #include "../bonuses/BonusParameters.h"
 #include "../callback/IGameInfoCallback.h"
 #include "../callback/IGameEventCallback.h"
+#include "../json/JsonNode.h"
 #include "../callback/IGameRandomizer.h"
 #include "../gameState/CGameState.h"
 #include "../mapObjectConstructors/CObjectClassesHandler.h"
@@ -186,7 +187,8 @@ void CGCreature::onHeroVisit(IGameEventCallback & gameEvents, const CGHeroInstan
 			ynd.player = h->tempOwner;
 			ynd.text.appendTextID("core.advevent.86");
 			ynd.text.replaceName(getCreatureID(), getJoiningAmount());
-			gameEvents.showBlockingDialog(this, &ynd);
+			gameEvents.showBlockingDialog(&ynd);
+			gameEvents.setVisitState(h, JsonNode(action));
 			break;
 		}
 	default: //join for gold
@@ -201,7 +203,8 @@ void CGCreature::onHeroVisit(IGameEventCallback & gameEvents, const CGHeroInstan
 			ynd.text.replaceNumber(getJoiningAmount());
 			ynd.text.replaceNumber(action);
 			ynd.text.replaceNamePlural(getCreature()->getId());
-			gameEvents.showBlockingDialog(this, &ynd);
+			gameEvents.showBlockingDialog(&ynd);
+			gameEvents.setVisitState(h, JsonNode(action));
 			break;
 		}
 	}
@@ -217,9 +220,17 @@ const CCreature * CGCreature::getCreature() const
 	return getCreatureID().toCreature();
 }
 
+int CGCreature::getEffectiveJoiningPercentage() const
+{
+	if(joiningPercentage >= 0)
+		return joiningPercentage;
+
+	return cb->getSettings().getInteger(EGameSettings::CREATURES_JOINING_PERCENTAGE);
+}
+
 TQuantity CGCreature::getJoiningAmount() const
 {
-	return std::max(static_cast<int64_t>(1), getStackCount(SlotID(0)) * cb->getSettings().getInteger(EGameSettings::CREATURES_JOINING_PERCENTAGE) / 100);
+	return std::max(static_cast<int64_t>(1), static_cast<int64_t>(getStackCount(SlotID(0))) * getEffectiveJoiningPercentage() / 100);
 }
 
 void CGCreature::pickRandomObject(IGameRandomizer & gameRandomizer)
@@ -303,7 +314,6 @@ void CGCreature::initObj(IGameRandomizer & gameRandomizer)
 	}
 
 	temppower = stacks[SlotID(0)]->getCount() * static_cast<int64_t>(1000);
-	refusedJoining = false;
 }
 
 void CGCreature::newTurn(IGameEventCallback & gameEvents, IGameRandomizer & gameRandomizer) const
@@ -333,9 +343,6 @@ void CGCreature::setPropertyDer(ObjProperty what, ObjPropertyID identifier)
 			break;
 		case ObjProperty::MONSTER_EXP:
 			giveAverageStackExperience(identifier.getNum());
-			break;
-		case ObjProperty::MONSTER_REFUSED_JOIN:
-			refusedJoining = identifier.getNum();
 			break;
 	}
 }
@@ -389,7 +396,7 @@ int CGCreature::takenAction(const CGHeroInstance *h, bool allowJoin) const
 	if(charisma < agression)
 		return FIGHT;
 
-	if (allowJoin && cb->getSettings().getInteger(EGameSettings::CREATURES_JOINING_PERCENTAGE) > 0)
+	if (allowJoin && getEffectiveJoiningPercentage() > 0)
 	{
 		if((cb->getSettings().getBoolean(EGameSettings::CREATURES_ALLOW_JOINING_FOR_FREE) || initialCharacter == Character::COMPLIANT) && diplomacy + sympathy + 1 >= agression && !joinOnlyForMoney)
 			return JOIN_FOR_FREE;
@@ -412,9 +419,6 @@ int CGCreature::takenAction(const CGHeroInstance *h, bool allowJoin) const
 
 void CGCreature::fleeDecision(IGameEventCallback & gameEvents, const CGHeroInstance *h, ui32 pursue) const
 {
-	if(refusedJoining)
-		gameEvents.setObjPropertyValue(id, ObjProperty::MONSTER_REFUSED_JOIN, false);
-
 	if(pursue)
 	{
 		fight(gameEvents, h);
@@ -431,7 +435,6 @@ void CGCreature::joinDecision(IGameEventCallback & gameEvents, const CGHeroInsta
 	{
 		if(takenAction(h,false) == FLEE)
 		{
-			gameEvents.setObjPropertyValue(id, ObjProperty::MONSTER_REFUSED_JOIN, true);
 			flee(gameEvents, h);
 		}
 		else //they fight
@@ -514,7 +517,8 @@ void CGCreature::flee(IGameEventCallback & gameEvents, const CGHeroInstance * h)
 	ynd.player = h->tempOwner;
 	ynd.text.appendTextID("core.advevent.91");
 	ynd.text.replaceName(getCreatureID(), getStackCount(SlotID(0)));
-	gameEvents.showBlockingDialog(this, &ynd);
+	gameEvents.showBlockingDialog(&ynd);
+	gameEvents.setVisitState(h, JsonNode(static_cast<int32_t>(FLEE)));
 }
 
 void CGCreature::battleFinished(IGameEventCallback & gameEvents, const CGHeroInstance *hero, const BattleResult &result) const
@@ -531,9 +535,26 @@ void CGCreature::battleFinished(IGameEventCallback & gameEvents, const CGHeroIns
 	}
 	else
 	{
+		const CCreature * cre = getCreature();
+
+		// creatures of other types, e.g. demons raised by pit lords, would break the single-type army
+		std::vector<SlotID> foreignSlots;
+		for(const auto & [slot, stack] : stacks)
+			if(stack->getCreature() != cre && !cre->isMyDirectUpgrade(stack->getCreature()))
+				foreignSlots.push_back(slot);
+
+		if(foreignSlots.size() == stacks.size())
+		{
+			// none of the original creatures survived
+			gameEvents.removeObject(this, result.attacker);
+			return;
+		}
+
+		for(const auto & slot : foreignSlots)
+			gameEvents.eraseStack(StackLocation(id, slot), true);
+
 		//merge stacks into one
 		TSlots::const_iterator i;
-		const CCreature * cre = getCreature();
 		for(i = stacks.begin(); i != stacks.end(); i++)
 		{
 			if(cre->isMyDirectUpgrade(i->second->getCreature()))
@@ -562,15 +583,18 @@ void CGCreature::battleFinished(IGameEventCallback & gameEvents, const CGHeroIns
 	}
 }
 
-void CGCreature::blockingDialogAnswered(IGameEventCallback & gameEvents, const CGHeroInstance *hero, int32_t answer) const
+void CGCreature::blockingDialogAnswered(IGameEventCallback & gameEvents, const CGHeroInstance *hero, int32_t answer, const JsonNode & visitState) const
 {
-	auto action = takenAction(hero);
-	if(!refusedJoining && action >= JOIN_FOR_FREE) //higher means price
-		joinDecision(gameEvents, hero, action, answer);
-	else if(action != FIGHT)
-		fleeDecision(gameEvents, hero, answer);
+	// Acted on as asked instead of decided anew: after a refused offer to join, the question is
+	// about fleeing while a fresh decision would still be to join
+	if(!visitState.isNumber() || visitState.Integer() == FIGHT)
+		throw std::runtime_error("Creatures at " + visitablePos().toString() + " got an answer to a question they did not ask: " + visitState.toCompactString());
+
+	const auto askedAbout = static_cast<int>(visitState.Integer());
+	if(askedAbout >= JOIN_FOR_FREE) //higher means price
+		joinDecision(gameEvents, hero, askedAbout, answer);
 	else
-		assert(0);
+		fleeDecision(gameEvents, hero, answer);
 }
 
 bool CGCreature::containsUpgradedStack() const
@@ -598,20 +622,19 @@ bool CGCreature::containsUpgradedStack() const
 
 int CGCreature::getNumberOfStacks(const CGHeroInstance * hero) const
 {
-	if(stacksCount > 0)
-		return stacksCount;
+	// non-positive values select the HotA split modes, applied by getDefaultNumberOfStacks
+	int64_t split = std::max<int64_t>(stacksCount, 0);
 
-	int split = 0;
-	if (hero->hasBonusOfType(BonusType::FORCE_NEUTRAL_ENCOUNTER_STACK_COUNT))
+	if (split == 0 && hero->hasBonusOfType(BonusType::FORCE_NEUTRAL_ENCOUNTER_STACK_COUNT))
 		split = getNumberOfStacksFromBonus(hero);
 
 	if(split == 0)
-	 split = getDefaultNumberOfStacks(hero);
+		split = getDefaultNumberOfStacks(hero);
 
 	vstd::amin(split, getStack(SlotID(0)).getCount()); //can't divide into more stacks than creatures total
-	vstd::amin(split, 7);   
+	vstd::amin(split, GameConstants::ARMY_SIZE);
 	vstd::amax(split, 1);
-	return split;
+	return static_cast<int>(split);
 }
 
 int CGCreature::getNumberOfStacksFromBonus(const CGHeroInstance * hero) const
@@ -667,19 +690,25 @@ int CGCreature::getDefaultNumberOfStacks(const CGHeroInstance *hero) const
 	else
 		split = 2;
 
-	ui32 R2 = hashByPosition();
-
-	int R4 = R2 % 100 + 1;
-
-	if(stacksCount == -3)
-		;
-	else if (stacksCount == -2 || R4 <= 20)
-		split -= 1;
-	else if(stacksCount == 0 || R4 >= 80)
-		split += 1;
-
-	vstd::amin(split, getStack(SlotID(0)).getCount()); //can't divide into more stacks than creatures total
-	vstd::amin(split, 7); //can't have more than 7 stacks
+	switch(stacksCount)
+	{
+		case -3: // HotA: average
+			break;
+		case -2: // HotA: one less
+			split -= 1;
+			break;
+		case 0: // HotA: one more
+			split += 1;
+			break;
+		default:
+		{
+			int R4 = hashByPosition() % 100 + 1;
+			if (R4 <= 20)
+				split -= 1;
+			else if (R4 >= 80)
+				split += 1;
+		}
+	}
 
 	return split;
 }

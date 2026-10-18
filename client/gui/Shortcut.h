@@ -22,8 +22,8 @@ enum class EShortcut
 	MOUSE_SWIPE_Y,
 
 	// Global hotkeys that are available in multiple dialogs
-	GLOBAL_ACCEPT,     // Return - Accept query
-	GLOBAL_CANCEL,     // Escape - Cancel query
+	GLOBAL_ACCEPT,     // Return - Accept dialog
+	GLOBAL_CANCEL,     // Escape - Cancel dialog
 	GLOBAL_RETURN,     // Enter, Escape - Close current window and return to previous view
 	GLOBAL_FULLSCREEN, // F4
 	GLOBAL_SCREENSHOT, // F3
@@ -198,6 +198,9 @@ enum class EShortcut
 
 	// Battle screen
 	BATTLE_TOGGLE_QUEUE,
+	BATTLE_TOGGLE_CURSOR_MODE,
+	BATTLE_PREVIOUS_ATTACK_DIRECTION,
+	BATTLE_NEXT_ATTACK_DIRECTION,
 	BATTLE_USE_CREATURE_SPELL,
 	BATTLE_SURRENDER,
 	BATTLE_RETREAT,

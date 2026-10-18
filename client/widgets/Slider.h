@@ -33,6 +33,10 @@ private:
 
 	std::optional<Rect> scrollBounds;
 
+	/// If true, touch-panning (GESTURE) is only accepted within this slider's own bounds,
+	/// ignoring scrollBounds (which still applies to WHEEL events).
+	bool restrictGestureToOwnBounds = false;
+
 	/// how many elements are visible simultaneously
 	int capacity;
 	/// number of highest position, or 0 if there is only one
@@ -70,6 +74,8 @@ public:
 	void setScrollBounds(const Rect & bounds );
 	void clearScrollBounds();
 
+	void setRestrictGestureToOwnBounds(bool on);
+
 	/// Value modifiers
 	void scrollTo(int value, bool callCallbacks = true);
 	void scrollBy(int amount) override;
@@ -93,6 +99,7 @@ public:
 	void clickReleased(const Point & cursorPosition) override;
 	void mouseDragged(const Point & cursorPosition, const Point & lastUpdateDistance) override;
 	void gesturePanning(const Point & initialPosition, const Point & currentPosition, const Point & lastUpdateDistance) override;
+	void gestureCanceled() override;
 	void gesture(bool on, const Point & initialPosition, const Point & finalPosition) override;
 	void showAll(Canvas & to) override;
 

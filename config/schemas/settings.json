@@ -755,6 +755,7 @@
 				"defaultRepositoryURL",
 				"extraRepositoryURL",
 				"extraRepositoryEnabled",
+				"httpProxy",
 				"autoCheckRepositories",
 				"fullModExtraction",
 				"ignoreSslErrors",
@@ -776,6 +777,10 @@
 					"default" : false
 				},
 				"extraRepositoryURL" : {
+					"type" : "string",
+					"default" : ""
+				},
+				"httpProxy" : {
 					"type" : "string",
 					"default" : ""
 				},

@@ -31,6 +31,7 @@
 #include "../gameState/CGameState.h"
 #include "../mapObjects/CGHeroInstance.h"
 #include "../mapObjects/CGTownInstance.h"
+#include "../mapObjects/MiscObjects.h"
 #include "../mapObjects/Quest.h"
 #include "../mapObjects/ObjectTemplate.h"
 #include "../serializer/JsonSerializeFormat.h"
@@ -210,6 +211,11 @@ ObjectInstanceID TerrainTile::topVisitableObj(bool excludeTop) const
 	return visitableObjects.back();
 }
 
+ObjectInstanceID TerrainTile::objectVisitedBy(ObjectInstanceID heroID) const
+{
+	return topVisitableObj(topVisitableObj() == heroID);
+}
+
 EDiggingStatus TerrainTile::getDiggingStatus(const bool excludeTop) const
 {
 	if(isWater() || !getTerrain()->isPassable())
@@ -249,8 +255,16 @@ CMap::~CMap()
 				artifact->detachFromSource(*part.getArtifact());
 }
 
+bool CMap::isHoleAt(const int3 & pos) const
+{
+	return holePositions.contains(pos);
+}
+
 void CMap::hideObject(CGObjectInstance * obj)
 {
+	if(obj->ID == Obj::HOLE)
+		holePositions.erase(obj->anchorPos());
+
 	const int zVal = obj->anchorPos().z;
 	for(int fx = 0; fx < obj->getWidth(); ++fx)
 	{
@@ -270,6 +284,9 @@ void CMap::hideObject(CGObjectInstance * obj)
 
 void CMap::showObject(CGObjectInstance * obj)
 {
+	if(obj->ID == Obj::HOLE)
+		holePositions.insert(obj->anchorPos());
+
 	const int zVal = obj->anchorPos().z;
 	for(int fx = 0; fx < obj->getWidth(); ++fx)
 	{
@@ -634,6 +651,9 @@ void CMap::addNewObject(std::shared_ptr<CGObjectInstance> obj)
 
 	if (vstd::contains(instanceNames, obj->instanceName))
 		throw std::runtime_error("Object instance name duplicated: "+obj->instanceName);
+
+	if(const auto * teleport = dynamic_cast<const CGTeleport *>(obj.get()))
+		teleport->warnIfNotVisitable();
 
 	if (obj->id == ObjectInstanceID(objects.size()))
 		objects.emplace_back(obj);

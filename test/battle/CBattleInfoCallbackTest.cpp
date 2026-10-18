@@ -159,7 +159,7 @@ public:
 	{
 	public:
 
-		const IBattleInfo * battle;
+		const IBattleInfo * battle = nullptr;
 		scripting::Pool * pool;
 
 		TestSubject(scripting::Pool * p)
@@ -257,6 +257,8 @@ public:
 	{
 		startBattle();
 		redirectUnitsToFake();
+		EXPECT_CALL(battleMock, getSidePlayer(Eq(BattleSide::ATTACKER))).WillRepeatedly(Return(PlayerColor(0)));
+		EXPECT_CALL(battleMock, getSidePlayer(Eq(BattleSide::DEFENDER))).WillRepeatedly(Return(PlayerColor(1)));
 
 		return subject.getAttackedBattleUnits(
 			&attacker, &defender,
@@ -758,9 +760,9 @@ public:
 	}
 };
 
-TEST_F(BattleFinishedTest, DISABLED_NoBattleIsDraw)
+TEST_F(BattleFinishedTest, NoBattleThrows)
 {
-	expectBattleDraw();
+	EXPECT_THROW(subject.battleIsFinished(), std::logic_error);
 }
 
 TEST_F(BattleFinishedTest, EmptyBattleIsDraw)
