@@ -1,5 +1,14 @@
 # Repository Guidelines
 
+## Fork operations (L-Sypniewski/vcmi)
+
+This checkout is a fork. All pushes and PRs target the fork (`origin`),
+never `upstream` (vcmi/vcmi — fetch-only; also no PRs/issues/comments there).
+Feature work uses sibling worktrees `../vcmi-<slug>`; the devcontainer and
+host-native build lanes, test baselines, and the full host cleanup map are in
+[`.opencode/fork-playbook.md`](.opencode/fork-playbook.md) (rules summary:
+[`.opencode/fork-workflow.md`](.opencode/fork-workflow.md)).
+
 ## GitHub Contribution Policy
 
 - Do not open pull requests or issues, and do not write their descriptions. The contributor opens them and writes the description in their own words, as required by [`CONTRIBUTING.md`](CONTRIBUTING.md#use-of-ai).
