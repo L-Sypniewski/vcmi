@@ -7,8 +7,11 @@ playbook (build lanes, commands, cleanup map). Core rules:
 1. **Never write to upstream.** No pushes to `vcmi/vcmi`, no PRs, issues, or
    comments there — fork-internal PRs only (feature branch → fork `develop`).
    `origin` = the fork; `upstream` = fetch-only.
-2. **`origin/develop` is a fast-forward mirror of upstream `develop`.** Sync =
-   `git fetch upstream && git push origin upstream/develop:develop`.
+2. **Fork `develop` carries merged fork features** (NOT a pure mirror — it
+   diverged when PR #1 merged). Sync = `git fetch upstream`, then on a local
+   `develop`: `git merge upstream/develop`, resolve conflicts, sweep green
+   (§3 of the playbook) if code was touched, `git push origin develop`.
+   Use `upstream/develop` when a pristine upstream base is needed.
 3. **The main checkout stays on `lukasz-experiment`** (agent/infra branch).
    Feature work happens in sibling worktrees: `../vcmi-<branch-slug>`.
 4. **Push the branch to the fork BEFORE devcontainer bring-up** — the container
