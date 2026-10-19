@@ -241,4 +241,6 @@ pre-dates this workflow).
   `.opencode/fork-playbook.md` (and the `AGENTS.md` fork section) on
   `lukasz-experiment` first, commit, then apply the same change on a local
   `develop` and push both — only ever commit these doc paths, never build
-  output or `.devcontainer/`.
+  output or `.devcontainer/`. On the local `develop`, run
+  `git reset --hard origin/develop` BEFORE applying (a stale local branch
+  bases the commit on ancient history and the push gets rejected).
