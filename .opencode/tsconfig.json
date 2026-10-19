@@ -1,0 +1,27 @@
+{
+  // Typecheck scope for the opencode TS surface (plugins + custom tools).
+  // Runtime is Bun, so types come from @types/bun (which also brings
+  // @types/node → `process`, `node:fs`, `node:path`, and `Bun.*`).
+  //
+  // NOTE: `.opencode` deps are intentionally local-only (`.opencode/.gitignore`
+  // keeps package.json / package-lock.json / node_modules untracked), so to
+  // typecheck here, install the dev deps locally:
+  //     (cd .opencode && npm install)     # @opencode-ai/plugin + @types/bun
+  // This mirrors how @opencode-ai/plugin is already a local prereq (its import
+  // is `import type`, erased at transpile; `bun build` resolves it at runtime).
+  // `bun build` ignores this file - it only governs the editor + `tsc --noEmit`.
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext"],
+    "types": ["bun"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  },
+  "include": ["plugin/**/*.ts", "plugins/**/*.ts", "tools/**/*.ts"]
+}

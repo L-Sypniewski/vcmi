@@ -47,8 +47,9 @@ std::string LobbyServer::sanitizeChatMessage(const std::string & inputString) co
 
 	for(const auto & ch : inputString)
 	{
-		// Remove all control characters
-		if (ch >= '\0' && ch < ' ')
+		// Remove all control characters; compare as unsigned char so UTF-8
+		// continuation bytes (>= 0x80, negative where char is signed) survive
+		if (static_cast<unsigned char>(ch) < ' ')
 			continue;
 
 		// Remove blacklisted characters such as brackets that are used for text formatting
