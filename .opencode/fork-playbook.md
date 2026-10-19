@@ -12,8 +12,18 @@ this machine (Apple Silicon macOS, Xcode CLT, colima). Companion to
 | `origin` | `L-Sypniewski/vcmi` | all pushes; fork-internal PRs (`feature → develop`) |
 | `upstream` | `vcmi/vcmi` | fetch-only mirror source |
 
-- `origin/develop` = fast-forward mirror of `upstream/develop`. Never commit
-  to it directly; sync via `git push origin upstream/develop:develop`.
+- `origin/develop` = upstream `develop` **plus merged fork features**, kept
+  current via merge-based sync (it stopped being a pure fast-forward mirror
+  when PR #1 merged, 2026-10-19):
+  ```sh
+  git fetch upstream
+  git checkout develop            # local branch tracking origin/develop
+  git merge upstream/develop      # resolve conflicts if any
+  git push origin develop
+  ```
+  If the sync resolved conflicts in code, run the green sweep (§3) before
+  pushing. Changes reach `develop` via PR merges or these sync merges — no
+  direct commits. Branch from `upstream/develop` for a pristine upstream base.
 - Feature branches (`ship/*` or `lukasz-*`) live on the fork and PR into fork
   `develop`. **No PRs/issues/comments on upstream** (repo policy + owner
   preference; upstream `AGENTS.md` GitHub Contribution Policy). History: the
@@ -27,7 +37,8 @@ this machine (Apple Silicon macOS, Xcode CLT, colima). Companion to
 
 ## 2. Standard feature flow
 
-1. Sync the mirror: `git fetch upstream && git push origin upstream/develop:develop`.
+1. Sync `develop`: fetch upstream and merge per §1; if the merge resolved
+   conflicts in code, sweep green (§3) before pushing.
 2. Branch from `origin/develop`; create worktree:
    `git worktree add ../vcmi-<slug> <branch>`.
 3. Merge current develop into the branch when it drifts; push the branch to
@@ -225,8 +236,9 @@ pre-dates this workflow).
 - Submodule pins move during merges between branches — a dirty `dependencies`
   in the main checkout after switching branches is expected;
   `git submodule update dependencies` restores it.
-- **The fork docs exist on two branches and must stay identical**: update
-  `.opencode/fork-workflow.md` + `.opencode/fork-playbook.md` (and the
-  `AGENTS.md` fork section) on `lukasz-experiment` first, commit, then copy
-  into the PR worktree and commit there — only ever commit these doc paths,
-  never build output or `.devcontainer/`.
+- **The fork docs live on `lukasz-experiment` and `develop` and must stay
+  identical**: edit `.opencode/fork-workflow.md` +
+  `.opencode/fork-playbook.md` (and the `AGENTS.md` fork section) on
+  `lukasz-experiment` first, commit, then apply the same change on a local
+  `develop` and push both — only ever commit these doc paths, never build
+  output or `.devcontainer/`.
