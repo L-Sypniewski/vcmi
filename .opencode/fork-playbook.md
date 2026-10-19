@@ -54,7 +54,9 @@ this machine (Apple Silicon macOS, Xcode CLT, colima). Companion to
 ```sh
 colima start --cpu 4 --memory 8        # container hard requirement; profile default is 2/2
 cd ../vcmi-<slug>
-# borrow the definition from lukasz-experiment (UNTRACKED — never commit):
+# Branches cut from current develop carry .devcontainer/ natively (PR #2).
+# Only branches predating that merge (or cut from upstream) need to borrow it
+# untracked from lukasz-experiment:
 for f in README.md devcontainer.json devcontainer-lock.json fetch-h3-data.sh \
          init-volume.sh set-git-identity.sh; do
   git -C ~/Documents/developer/vcmi show lukasz-experiment:.devcontainer/$f \

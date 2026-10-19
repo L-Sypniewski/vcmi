@@ -26,7 +26,9 @@ playbook (build lanes, commands, cleanup map). Core rules:
      `$HOME/Library/Application Support/vcmi`.
 6. **Done = green sweep** (full build + full unit suite in the container)
    before declaring work finished or updating a fork PR.
-7. **Never commit** `.devcontainer/`, `.env`, or credential files — the
-   devcontainer definition is borrowed untracked from `lukasz-experiment`.
+7. **Never commit** `.env` or credential files (auth JSONs). `.devcontainer/`
+   is tracked on `develop` since PR #2 — branches cut from current develop
+   carry it natively; only branches predating that merge borrow it untracked
+   from `lukasz-experiment`.
 8. **Consult the cleanup map** in the playbook before creating new host or
    Docker artifacts; reuse existing volumes, venv, and caches.
