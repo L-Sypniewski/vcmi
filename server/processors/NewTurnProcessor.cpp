@@ -37,7 +37,6 @@
 #include "../../lib/networkPacks/StackLocation.h"
 #include "../../lib/pathfinder/TurnInfo.h"
 #include "../../lib/texts/CGeneralTextHandler.h"
-#include "../TurnStartVisitScheduler.h"
 
 #include <vstd/RNG.h>
 
@@ -83,7 +82,7 @@ void NewTurnProcessor::handleTimeEvents(PlayerColor color)
 		//remove objects specified by event
 		for(const ObjectInstanceID objectIdToRemove : event.deletedObjectsInstances)
 		{
-			const auto * objectInstance = gameHandler->gameInfo().getObj(objectIdToRemove, false);
+			const auto * objectInstance = gameHandler->gameInfo().tryGetObj(objectIdToRemove);
 			if(objectInstance != nullptr)
 				gameHandler->removeObject(objectInstance, PlayerColor::NEUTRAL);
 		}
@@ -161,28 +160,13 @@ void NewTurnProcessor::handleTownEvents(const CGTownInstance * town)
 	}
 }
 
-void NewTurnProcessor::onPlayerTurnStarted(PlayerColor which)
+void NewTurnProcessor::handleTurnStartEvents(PlayerColor which)
 {
 	const auto * playerState = gameHandler->gameState().getPlayerState(which);
 
 	handleTimeEvents(which);
 	for (const auto * t : playerState->getTowns())
 		handleTownEvents(t);
-
-	std::deque<PendingTurnStartVisit> visits;
-
-	for (const auto * t : playerState->getTowns())
-	{
-		//garrison hero first - consistent with original H3 Mana Vortex and Battle Scholar Academy levelup windows order
-		if(t->getGarrisonHero() != nullptr)
-			visits.push_back({which, t->id, t->getGarrisonHero()->id});
-
-		if(t->getVisitingHero() != nullptr)
-			visits.push_back({which, t->id, t->getVisitingHero()->id});
-	}
-
-	gameHandler->turnStartVisitScheduler->enqueue(which, std::move(visits));
-	gameHandler->turnStartVisitScheduler->processNext(which);
 }
 
 void NewTurnProcessor::onPlayerTurnEnded(PlayerColor which)
@@ -393,6 +377,10 @@ void NewTurnProcessor::updateNeutralTownGarrison(const CGTownInstance * t, int c
 	const auto & levelCreatures = townCreatures[levelToGrow];
 	const CCreature * baseCreature = levelCreatures.front().toCreature();
 	const int growthAmount = baseCreature->getGrowth();
+
+	// special creatures may have no growth
+	if (growthAmount <= 0)
+		return;
 
 	const auto & takeFromAvailable = [this, t, levelToGrow, growthAmount]()
 	{

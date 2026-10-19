@@ -89,8 +89,7 @@ void GraphPaths::calculatePaths(const CGHeroInstance * targetHero, const Nullkil
 
 				auto questInfo = QuestInfo(node.obj->id);
 				auto questAction = std::make_shared<AIPathfinding::QuestAction>(questInfo);
-
-				if(!questAction->canAct(aiNk, targetHero))
+				if(source->requiresVisitBeforePassing(targetHero->getOwner()) || !questAction->canAct(aiNk, targetHero))
 				{
 					transitionAction = questAction;
 				}
@@ -119,7 +118,7 @@ void GraphPaths::calculatePaths(const CGHeroInstance * targetHero, const Nullkil
 
 					if(targetGraphNode.objID.hasValue())
 					{
-						targetNode.obj = aiNk->cc->getObj(targetGraphNode.objID, false);
+						targetNode.obj = aiNk->cc->tryGetObj(targetGraphNode.objID);
 
 						if(targetNode.obj && targetNode.obj->ID == Obj::HERO)
 							return;

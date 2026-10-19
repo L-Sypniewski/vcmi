@@ -77,6 +77,8 @@ See also installation guide for [Heroes Chronicles](players/Heroes_Chronicles.md
 
 ## Documentation and guidelines for developers
 
+- [Contribution Guidelines](../CONTRIBUTING.md)
+
 Development environment setup instructions:
 
 - [Building VCMI for Android](developers/Building_Android.md)
@@ -92,6 +94,7 @@ Engine documentation: (NOTE: may be outdated)
 - [Coding Guidelines](developers/Coding_Guidelines.md)
 - [Bonus System](developers/Bonus_System.md)
 - [Code Structure](developers/Code_Structure.md)
+- [Battle Telnet Mirror](developers/Battle_Telnet_Mirror.md)
 - [Logging API](developers/Logging_API.md)
 - [Lua Scripting System](developers/Lua_Scripting_System.md)
 - [Serialization](developers/Serialization.md)

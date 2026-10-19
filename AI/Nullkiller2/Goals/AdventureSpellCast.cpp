@@ -50,6 +50,10 @@ void AdventureSpellCast::accept(AIGateway * aiGw)
 
 	if(town && townPortalEffect)
 	{
+		// a hero chain may lead to the town through an earlier node, and the hero would count as its occupant
+		if(hero->getVisitedTown() == town)
+			throw goalFulfilledException(sptr(*this));
+
 		aiGw->selectedObject = town->id;
 
 		if(town->getVisitingHero() && town->tempOwner == aiGw->playerID && !town->getUpperArmy()->stacksCount())
@@ -62,27 +66,44 @@ void AdventureSpellCast::accept(AIGateway * aiGw)
 	}
 
 	if (hero->isGarrisoned())
-		aiGw->cc->swapGarrisonHero(hero->getVisitedTown());
-
-	if(aiGw->cc->isInTheMap(tile))
 	{
-		spells::detail::ProblemImpl problem;
-		if(!spell->getAdventureMechanics().canBeCastAt(problem, aiGw->cc.get(), hero, tile))
-			throw cannotFulfillGoalException("Can not cast " + spell->getNameTranslated() + " at " + tile.toString());
+		if(!aiGw->canSwapGarrisonHero(hero->getVisitedTown()))
+			throw cannotFulfillGoalException("Hero can not leave garrison, wandering heroes limit is reached!");
+		aiGw->cc->swapGarrisonHero(hero->getVisitedTown());
+	}
+
+	spells::detail::ProblemImpl problem;
+	const auto & mechanics = spell->getAdventureMechanics();
+	if(aiGw->cc->isInTheMap(tile) ? !mechanics.canBeCastAt(problem, aiGw->cc.get(), hero, tile) : !mechanics.canBeCast(problem, aiGw->cc.get(), hero))
+	{
+		std::vector<std::string> reasons;
+		problem.getAll(reasons);
+		throw cannotFulfillGoalException("Can not cast " + spell->getNameTranslated() + " at " + tile.toString() + ": " + boost::algorithm::join(reasons, "; "));
 	}
 
 	const auto wait = aiGw->cc->waitTillRealize;
 	aiGw->cc->waitTillRealize = true;
 	aiGw->cc->castSpell(hero, spellID, tile);
-	aiGw->waitTillFree(); // Adventure spells may trigger visits and level-up queries.
+	// Adventure spells may trigger visits and level-up dialogs.
+	// Restore only afterwards: a battle started by the cast suspends waiting and restores it on its own end
+	aiGw->waitTillFree();
+	aiGw->cc->waitTillRealize = wait;
+
+	// the server may refuse a cast that looked possible here; reporting it as done would make
+	// the planner pick the same cast again and again
+	if(!aiGw->lastAdventureCastSucceeded)
+		throw cannotFulfillGoalException("Server refused to cast " + spell->getNameTranslated() + " at " + tile.toString());
 
 	if(town && townPortalEffect)
 	{
 		// visit town
-		aiGw->moveHeroToTile(town->visitablePos(), HeroPtr(hero, aiGw->cc.get()));
+		if(aiGw->moveHeroToTile(town->visitablePos(), HeroPtr(hero, aiGw->cc.get()))
+			!= HeroMovementResult::COMPLETE)
+		{
+			throw cannotFulfillGoalException("Unable to visit town after casting Town Portal.");
+		}
 	}
 
-	aiGw->cc->waitTillRealize = wait;
 	throw goalFulfilledException(sptr(*this));
 }
 

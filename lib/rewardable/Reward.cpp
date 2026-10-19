@@ -15,6 +15,7 @@
 #include "../serializer/JsonSerializeFormat.h"
 #include "../constants/StringConstants.h"
 #include "../CSkillHandler.h"
+#include "../CCreatureHandler.h"
 
 void Rewardable::RewardRevealTiles::serializeJson(JsonSerializeFormat & handler)
 {
@@ -42,6 +43,24 @@ Rewardable::Reward::Reward()
 }
 
 Rewardable::Reward::~Reward() = default;
+
+void Rewardable::Reward::removeInvalidCreatures(const std::string & context)
+{
+	const auto removeInvalid = [&context](std::vector<CStackBasicDescriptor> & stacks, const std::string & field)
+	{
+		vstd::erase_if(stacks, [&](const CStackBasicDescriptor & stack)
+		{
+			if(stack.getCount() > 0)
+				return false;
+
+			logMod->error("%s: %s has %d units of %s, removed", context, field, stack.getCount(), stack.getCreature()->getJsonKey());
+			return true;
+		});
+	};
+
+	removeInvalid(creatures, "creatures");
+	removeInvalid(guards, "guards");
+}
 
 si32 Rewardable::Reward::calculateManaPoints(const CGHeroInstance * hero) const
 {
@@ -179,7 +198,7 @@ void Rewardable::Reward::serializeJson(JsonSerializeFormat & handler)
 	handler.serializeInt("manaDiff", manaDiff);
 	handler.serializeInt("manaOverflowFactor", manaOverflowFactor);
 	handler.serializeInt("movePoints", movePoints);
-	handler.serializeInt("moveOverflowFactor", manaOverflowFactor);
+	handler.serializeInt("moveOverflowFactor", moveOverflowFactor);
 	handler.serializeIdArray("artifacts", grantedArtifacts);
 	handler.serializeIdArray("takenArtifacts", takenArtifacts);
 	handler.serializeIdArray("takenArtifactSlots", takenArtifactSlots);

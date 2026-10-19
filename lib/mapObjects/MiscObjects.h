@@ -70,6 +70,7 @@ public:
 
 	void initObj(IGameRandomizer & gameRandomizer) override;
 	bool passableFor(PlayerColor color) const override;
+	bool isLocked() const override;
 	void onHeroVisit(IGameEventCallback & gameEvents, const CGHeroInstance * h) const override;
 	void battleFinished(IGameEventCallback & gameEvents, const CGHeroInstance *hero, const BattleResult &result) const override;
 
@@ -98,7 +99,7 @@ public:
 
 	void onHeroVisit(IGameEventCallback & gameEvents, const CGHeroInstance * h) const override;
 	void battleFinished(IGameEventCallback & gameEvents, const CGHeroInstance *hero, const BattleResult &result) const override;
-	void blockingDialogAnswered(IGameEventCallback & gameEvents, const CGHeroInstance *hero, int32_t answer) const override;
+	void blockingDialogAnswered(IGameEventCallback & gameEvents, const CGHeroInstance *hero, int32_t answer, const JsonNode & visitState) const override;
 
 	MetaString getObjectName() const override;
 	MetaString getPopupText(PlayerColor player) const override;
@@ -155,7 +156,7 @@ private:
 
 	void onHeroVisit(IGameEventCallback & gameEvents, const CGHeroInstance * h) const override;
 	void battleFinished(IGameEventCallback & gameEvents, const CGHeroInstance *hero, const BattleResult &result) const override;
-	void blockingDialogAnswered(IGameEventCallback & gameEvents, const CGHeroInstance *hero, int32_t answer) const override;
+	void blockingDialogAnswered(IGameEventCallback & gameEvents, const CGHeroInstance *hero, int32_t answer, const JsonNode & visitState) const override;
 
 	void flagMine(IGameEventCallback & gameEvents, const PlayerColor & player) const;
 	void initObj(IGameRandomizer & gameRandomizer) override;
@@ -229,6 +230,8 @@ public:
 	static bool isConnected(const CGTeleport * src, const CGTeleport * dst);
 	static bool isConnected(const CGObjectInstance * src, const CGObjectInstance * dst);
 	static void addToChannel(std::map<TeleportChannelID, std::shared_ptr<TeleportChannel> > &channelsList, const CGTeleport * obj);
+	/// Warns if the map places this teleport with a template that has no visitable tile, which heroes can neither enter nor leave
+	void warnIfNotVisitable() const;
 	static std::vector<ObjectInstanceID> getPassableExits(const IGameInfoCallback & gameInfo, const CGHeroInstance * h, std::vector<ObjectInstanceID> exits);
 	static bool isExitPassable(const IGameInfoCallback & gameInfo, const CGHeroInstance * h, const CGObjectInstance * obj);
 
@@ -289,6 +292,9 @@ class CGWhirlpool : public CGMonolith
 public:
 	using CGMonolith::CGMonolith;
 
+	/// Tiles of the given whirlpools that a hero can arrive at: tiles where the whirlpool is visitable and no hero stands
+	static TTeleportExitsList getPassableExitTiles(const IGameInfoCallback & gameInfo, const std::vector<ObjectInstanceID> & exits);
+
 	template <typename Handler> void serialize(Handler &h)
 	{
 		h & static_cast<CGMonolith&>(*this);
@@ -313,6 +319,7 @@ public:
 class DLL_LINKAGE CGBoat : public CGObjectInstance, public CBonusSystemNode
 {
 	ObjectInstanceID boardedHeroID;
+	ObjectInstanceID lastHeroID; // hero that used this boat the last time, remains set after hero disembarks
 
 public:
 	using CGObjectInstance::CGObjectInstance;
@@ -332,6 +339,7 @@ public:
 
 	void setBoardedHero(const CGHeroInstance * hero);
 	const CGHeroInstance * getBoardedHero() const;
+	ObjectInstanceID getLastHeroID() const { return lastHeroID; }
 
 	template <typename Handler> void serialize(Handler &h)
 	{
@@ -339,6 +347,10 @@ public:
 		h & static_cast<CBonusSystemNode&>(*this);
 		h & direction;
 		h & boardedHeroID;
+		if(h.hasFeature(Handler::Version::BOAT_LAST_HERO))
+			h & lastHeroID;
+		else
+			lastHeroID = ObjectInstanceID();
 
 		h & layer;
 		h & onboardAssaultAllowed;

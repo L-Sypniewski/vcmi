@@ -10,6 +10,8 @@
 #include "StdInc.h"
 #include "CCallback.h"
 
+#include "CallbackDefines.h"
+
 #include "../gameState/CGameState.h"
 #include "../mapObjects/CGHeroInstance.h"
 #include "../mapObjects/CGTownInstance.h"
@@ -17,7 +19,6 @@
 #include "../networkPacks/PacksForServer.h"
 #include "../networkPacks/SaveLocalState.h"
 
-#define ASSERT_IF_CALLED_WITH_PLAYER if(!getPlayerID()) {logGlobal->error(BOOST_CURRENT_FUNCTION); assert(0);}
 
 bool CCallback::teleportHero(const CGHeroInstance *who, const CGTownInstance *where)
 {
@@ -42,22 +43,22 @@ void CCallback::moveHero(const CGHeroInstance *h, const std::vector<int3> & path
 	sendRequest(pack);
 }
 
-int CCallback::selectionMade(int selection, QueryID queryID)
+int CCallback::selectionMade(int selection, QuestionID questionID)
 {
-	return sendQueryReply(selection, queryID);
+	return sendQuestionAnswer(selection, questionID);
 }
 
-int CCallback::sendQueryReply(std::optional<int32_t> reply, QueryID queryID)
+int CCallback::sendQuestionAnswer(std::optional<int32_t> reply, QuestionID questionID)
 {
-	ASSERT_IF_CALLED_WITH_PLAYER
-	if(queryID == QueryID(-1))
+	THROW_IF_CALLED_WITH_PLAYER();
+	if(questionID == QuestionID(-1))
 	{
-		logGlobal->error("Cannot answer the query -1!");
+		logGlobal->error("Cannot answer question -1!");
 		return -1;
 	}
 
-	QueryReply pack(queryID, reply);
-	pack.player = *getPlayerID();
+	QuestionAnswer pack(questionID, reply);
+	pack.player = getPlayerID().value();
 	return sendRequest(pack);
 }
 
@@ -90,7 +91,7 @@ bool CCallback::upgradeCreature(const CArmedInstance *obj, SlotID stackPos, Crea
 
 void CCallback::endTurn()
 {
-	logGlobal->trace("Player %d ended his turn.", getPlayerID()->getNum());
+	logGlobal->trace("Player %d ended his turn.", getPlayerID().value().getNum());
 	EndTurn pack;
 	sendRequest(pack);
 }
@@ -306,7 +307,7 @@ void CCallback::recruitHero(const CGObjectInstance *townOrTavern, const CGHeroIn
 	assert(hero);
 
 	HireHero pack(hero->getHeroTypeID(), townOrTavern->id, nextHero);
-	pack.player = *getPlayerID();
+	pack.player = getPlayerID().value();
 	sendRequest(pack);
 }
 
@@ -314,7 +315,7 @@ void CCallback::saveLocalState(const JsonNode & data)
 {
 	SaveLocalState state;
 	state.data = data;
-	state.player = *getPlayerID();
+	state.player = getPlayerID().value();
 
 	sendRequest(state);
 }
@@ -336,21 +337,21 @@ void CCallback::gamePause(bool pause)
 	if(pause)
 	{
 		GamePause pack;
-		pack.player = *getPlayerID();
+		pack.player = getPlayerID().value();
 		sendRequest(pack);
 	}
 	else
 	{
-		sendQueryReply(0, QueryID::CLIENT);
+		sendQuestionAnswer(0, QuestionID::CLIENT);
 	}
 }
 
 void CCallback::sendMessage(const std::string &mess, const CGObjectInstance * currentObject)
 {
-	ASSERT_IF_CALLED_WITH_PLAYER
+	THROW_IF_CALLED_WITH_PLAYER();
 	PlayerMessage pm(mess, currentObject? currentObject->id : ObjectInstanceID(-1));
 	if(getPlayerID())
-		pm.player = *getPlayerID();
+		pm.player = getPlayerID().value();
 	sendRequest(pm);
 }
 
@@ -375,6 +376,11 @@ bool CCallback::canMoveBetween(const int3 &a, const int3 &b)
 {
 	//bidirectional
 	return gameState().getMap().canMoveBetween(a, b);
+}
+
+bool CCallback::isContactAllowed(PlayerColor color1, PlayerColor color2) const
+{
+	return gameState().isContactAllowed(color1, color2);
 }
 
 std::optional<PlayerColor> CCallback::getPlayerID() const

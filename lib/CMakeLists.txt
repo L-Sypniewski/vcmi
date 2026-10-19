@@ -7,6 +7,7 @@ set(lib_SRCS
 	filesystem/CCompressedStream.cpp
 	filesystem/CFileInputStream.cpp
 	filesystem/CFilesystemLoader.cpp
+	filesystem/CInputStream.cpp
 	filesystem/CMemoryBuffer.cpp
 	filesystem/CMemoryStream.cpp
 	filesystem/CZipLoader.cpp
@@ -28,6 +29,7 @@ set(lib_SRCS
 	logging/CLogger.cpp
 	logging/VisualLogger.cpp
 
+	network/HttpDownloader.cpp
 	network/NetworkConnection.cpp
 	network/NetworkDiscovery.cpp
 	network/NetworkHandler.cpp
@@ -143,6 +145,7 @@ set(lib_MAIN_SRCS
 	gameState/QuestInfo.cpp
 	gameState/ReplayLog.cpp
 	gameState/RumorState.cpp
+	gameState/SaveMetadata.cpp
 	gameState/TavernHeroesPool.cpp
 	gameState/GameStatistics.cpp
 	gameState/UpgradeInfo.cpp
@@ -264,10 +267,12 @@ set(lib_MAIN_SRCS
 	rmg/modificators/TerrainPainter.cpp
 	rmg/MapProxy.cpp
 
+	serializer/CLegacyLoadFile.cpp
 	serializer/CLoadFile.cpp
 	serializer/CMemorySerializer.cpp
 	serializer/GameConnection.cpp
 	serializer/CSaveFile.cpp
+	serializer/SaveFileFormat.cpp
 	serializer/CTypeList.cpp
 	serializer/JsonDeserializer.cpp
 	serializer/JsonSerializeFormat.cpp
@@ -389,6 +394,7 @@ set(lib_HEADERS
 	logging/CLogger.h
 	logging/VisualLogger.h
 
+	network/HttpDownloader.h
 	network/NetworkConnection.h
 	network/NetworkDefines.h
 	network/NetworkDiscovery.h
@@ -498,6 +504,7 @@ set(lib_MAIN_HEADERS
 
 	callback/CAdventureAI.h
 	callback/Calendar.h
+	callback/CallbackDefines.h
 	callback/CBattleCallback.h
 	callback/CBattleGameInterface.h
 	callback/AIFactory.h
@@ -576,6 +583,7 @@ set(lib_MAIN_HEADERS
 	gameState/InfoAboutArmy.h
 	gameState/ReplayLog.h
 	gameState/RumorState.h
+	gameState/SaveMetadata.h
 	gameState/SThievesGuildInfo.h
 	gameState/TavernHeroesPool.h
 	gameState/GameStatistics.h
@@ -740,11 +748,13 @@ set(lib_MAIN_HEADERS
 
 	serializer/BinaryDeserializer.h
 	serializer/BinarySerializer.h
+	serializer/CLegacyLoadFile.h
 	serializer/CLoadFile.h
 	serializer/CMemorySerializer.h
 	serializer/GameConnection.h
 	serializer/CSaveFile.h
 	serializer/CSerializer.h
+	serializer/SaveFileFormat.h
 	serializer/CTypeList.h
 	serializer/GameConnectionID.h
 	scripting/IScriptVariablesHost.h
@@ -866,6 +876,10 @@ endif()
 
 if(IOS)
 	target_link_libraries(vcmiMain PUBLIC iOS_utils)
+endif()
+
+if(ENABLE_LIBCURL)
+	target_link_libraries(vcmiMain PUBLIC CURL::libcurl)
 endif()
 
 target_include_directories(vcmiMain

@@ -171,6 +171,12 @@ void CRecruitmentWindow::select(std::shared_ptr<CCreatureCard> card)
 
 		vstd::amin(maxAmount, card->amount);
 
+		if(card->creature->warMachine.hasValue())
+		{
+			const auto * hero = dynamic_cast<const CGHeroInstance *>(dst);
+			vstd::amin(maxAmount, hero && hero->canRecruitWarMachine(card->creature->warMachine) ? 1 : 0);
+		}
+
 		slider->setAmount(maxAmount);
 
 		if(slider->getValue() != maxAmount)
@@ -212,7 +218,7 @@ void CRecruitmentWindow::buy()
 	{
 		ArtifactID newWarMachine = selected->creature->warMachine;
 		ArtifactID currentWarMachine = hero->getReplacedWarMachine(newWarMachine);
-		if (currentWarMachine.hasValue() && newWarMachine != currentWarMachine)
+		if (currentWarMachine.hasValue())
 		{
 			MetaString message;
 			message.appendTextID("vcmi.townWindow.blacksmith.replaceWarMachine");
@@ -479,24 +485,26 @@ void CSplitWindow::sliderMoved(int to)
 	setAmount(rightMin + to, false);
 }
 
-CLevelWindow::CLevelWindow(const CGHeroInstance * hero, PrimarySkill pskill, std::vector<SecondarySkill> & skills, std::function<void(ui32)> callback)
+CLevelWindow::CLevelWindow(CPlayerInterface * askedInterface, const CGHeroInstance * hero, PrimarySkill pskill, const std::vector<SecondarySkill> & skills, bool moreLevels, QuestionID question)
 	: CWindowObject(PLAYER_COLORED, ImagePath::builtin("LVLUPBKG")),
 	skillViewOffset(0)
 {
 	OBJECT_CONSTRUCTION;
 
-	initLevelUpData(hero, skills, callback);
+	initLevelUpData(askedInterface, hero, skills, moreLevels, question);
 	createLevelUpControls(pskill);
 	setRedrawParent(true);
 	redraw();
 }
 
-void CLevelWindow::initLevelUpData(const CGHeroInstance * heroInstance, const std::vector<SecondarySkill> & availableSkills, const std::function<void(ui32)> & callback)
+void CLevelWindow::initLevelUpData(CPlayerInterface * askedInterface, const CGHeroInstance * heroInstance, const std::vector<SecondarySkill> & availableSkills, bool moreLevels, QuestionID question)
 {
-	GAME->interface()->showingDialog->setBusy();
+	owner = askedInterface;
+	moreLevelsFollow = moreLevels;
+	owner->showingDialog->setBusy();
 	selectionSubmitted = false;
 	hero = heroInstance;
-	cb = callback;
+	questionID = question;
 	skills = availableSkills;
 	skillViewOffset = 0;
 	sortedSkills = availableSkills;
@@ -566,11 +574,11 @@ void CLevelWindow::createLevelUpControls(PrimarySkill pskill)
 	skillValue = std::make_shared<CLabel>(192, 253, FONT_MEDIUM, ETextAlignment::CENTER, Colors::WHITE, skillValueText.toString(&GAME->translator()));
 }
 
-void CLevelWindow::updateLevelUpData(const CGHeroInstance * heroInstance, PrimarySkill pskill, const std::vector<SecondarySkill> & availableSkills, const std::function<void(ui32)> & callback)
+void CLevelWindow::updateLevelUpData(CPlayerInterface * askedInterface, const CGHeroInstance * heroInstance, PrimarySkill pskill, const std::vector<SecondarySkill> & availableSkills, bool moreLevels, QuestionID question)
 {
 	OBJECT_CONSTRUCTION;
 
-	initLevelUpData(heroInstance, availableSkills, callback);
+	initLevelUpData(askedInterface, heroInstance, availableSkills, moreLevels, question);
 	createLevelUpControls(pskill);
 	setRedrawParent(true);
 	redraw();
@@ -617,11 +625,6 @@ void CLevelWindow::createSkillBox()
 	redraw();
 }
 
-void CLevelWindow::setCloseOnSelection(bool value)
-{
-	closeOnSelection = value;
-}
-
 void CLevelWindow::submitSelection()
 {
 	if(!selectionSubmitted)
@@ -635,7 +638,7 @@ void CLevelWindow::submitSelection()
 		// For a single available option, auto-pick it
 		if(skills.empty())
 		{
-			cb(0);
+			answer(0);
 		}
 		else
 		{
@@ -650,15 +653,23 @@ void CLevelWindow::submitSelection()
 			const auto & chosen = sortedSkills[(idx + skillViewOffset) % skills.size()];
 			auto it = std::find(skills.begin(), skills.end(), chosen);
 
-			cb(std::distance(skills.begin(), it));
+			answer(std::distance(skills.begin(), it));
 		}
 
 		selectionSubmitted = true;
-		GAME->interface()->showingDialog->setFree();
+		owner->showingDialog->setFree();
 	}
 
-	if(closeOnSelection)
+	// Before a further level the window stays open, so that the chain reuses it instead of flickering.
+	// The last one closes at once: a window pushed above it, e.g. a conquered garrison, would block it
+	if(!questionID.hasValue() || !moreLevelsFollow)
 		close();
+}
+
+void CLevelWindow::answer(ui32 selection)
+{
+	if(questionID.hasValue())
+		owner->cb->selectionMade(selection, questionID);
 }
 
 void CLevelWindow::close()
@@ -1321,12 +1332,12 @@ void CUnivConfirmWindow::makeDeal(SecondarySkill skill)
 	close();
 }
 
-CGarrisonWindow::CGarrisonWindow(const CArmedInstance * up, const CGHeroInstance * down, bool removableUnits, const MetaString & customTitle)
+CGarrisonWindow::CGarrisonWindow(const CArmedInstance * up, const CGHeroInstance * down, const MetaString & customTitle)
 	: CWindowObject(PLAYER_COLORED, ImagePath::builtin("GARRISON"))
 {
 	OBJECT_CONSTRUCTION;
 
-	garr = std::make_shared<CGarrisonInt>(Point(92, 127), 4, Point(0,96), up, down, removableUnits);
+	garr = std::make_shared<CGarrisonInt>(Point(92, 127), 4, Point(0,96), up, down);
 	garr->showMoveUnitsOnHover = true;
 	{
 		auto split = std::make_shared<CButton>(Point(88, 314), AnimationPath::builtin("IDV6432.DEF"), CButton::tooltip(LIBRARY->generaltexth->translate("core.tcommand.3"), ""), [this](){ garr->splitClick(); }, EShortcut::HERO_ARMY_SPLIT );

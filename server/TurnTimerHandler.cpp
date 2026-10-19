@@ -11,7 +11,7 @@
 #include "TurnTimerHandler.h"
 #include "CGameHandler.h"
 #include "battles/BattleProcessor.h"
-#include "queries/QueriesProcessor.h"
+#include "activities/ActivityProcessor.h"
 #include "processors/TurnOrderProcessor.h"
 #include "../lib/battle/BattleInfo.h"
 #include "../lib/gameState/CGameState.h"
@@ -48,6 +48,12 @@ void TurnTimerHandler::setTimerEnabled(PlayerColor player, bool enabled)
 	assert(player.isValidPlayer());
 	timers[player].isActive = enabled;
 	sendTimerUpdate(player);
+}
+
+bool TurnTimerHandler::isTimerEnabled(PlayerColor player) const
+{
+	auto it = timers.find(player);
+	return it != timers.end() && it->second.isActive;
 }
 
 void TurnTimerHandler::setEndTurnAllowed(PlayerColor player, bool enabled)
@@ -155,7 +161,7 @@ void TurnTimerHandler::onPlayerMakingTurn(PlayerColor player, int waitTime)
 	
 	auto & timer = timers[player];
 	timer.isTurnStart = false;
-	const auto * state = gameHandler.gameInfo().getPlayerState(player);
+	const auto * state = gameHandler.gameInfo().tryGetPlayerState(player);
 	if(state && state->human && timer.isActive && !timer.isBattle && state->status == EPlayerStatus::INGAME)
 	{
 		// turn timers are only used if turn timer is non-zero
@@ -168,7 +174,7 @@ void TurnTimerHandler::onPlayerMakingTurn(PlayerColor player, int waitTime)
 		if(timerCountDown(timer.baseTimer, si->turnTimerInfo.baseTimer, player, waitTime))
 			return;
 
-		if(endTurnAllowed[state->color] && !gameHandler.queries->topQuery(state->color)) //wait for replies to avoid pending queries
+		if(endTurnAllowed[state->color] && !gameHandler.activities->topActivity(state->color)) //wait for replies to avoid pending activities
 			gameHandler.turnOrder->onPlayerEndsTurn(state->color);
 	}
 }
@@ -180,8 +186,8 @@ bool TurnTimerHandler::isPvpBattle(const BattleID & battleID) const
 	auto defender = gs.getBattle(battleID)->getSidePlayer(BattleSide::DEFENDER);
 	if(attacker.isValidPlayer() && defender.isValidPlayer())
 	{
-		const auto * attackerState = gameHandler.gameInfo().getPlayerState(attacker);
-		const auto * defenderState = gameHandler.gameInfo().getPlayerState(defender);
+		const auto * attackerState = gameHandler.gameInfo().tryGetPlayerState(attacker);
+		const auto * defenderState = gameHandler.gameInfo().tryGetPlayerState(defender);
 		if(attackerState && defenderState && attackerState->human && defenderState->human)
 			return true;
 	}
@@ -300,7 +306,7 @@ void TurnTimerHandler::onBattleLoop(const BattleID & battleID, int waitTime)
 	if(!player.isValidPlayer())
 		return;
 	
-	const auto * state = gameHandler.gameInfo().getPlayerState(player);
+	const auto * state = gameHandler.gameInfo().tryGetPlayerState(player);
 	assert(state && state->status == EPlayerStatus::INGAME);
 	if(!state || state->status != EPlayerStatus::INGAME || !state->human)
 		return;

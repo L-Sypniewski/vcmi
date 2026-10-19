@@ -59,13 +59,20 @@ enum class ESerializationVersion : int32_t
 	RECORD_TEXTS_METASTRING, // highscore scenario name and statistics map name are stored unresolved, to be rendered by the reader
 	BONUS_TARGET_SOURCE_ID, // bonus can restrict PERCENT_TO_TARGET_TYPE to a single source ID
 	SECONDARY_SKILL_OFFER_COOLDOWN, // hero stores level at which skills with offer cooldown were gained
-	SEER_HUT_NAME_TEXT_ID, // seer name is stored as text identifier, and a quest may override it with a map-defined name
+	SEER_HUT_NAME_TEXT_ID, // seer name is stored as text identifier, and a quest stores map-defined timeout message
+	SIMTURNS_CONTACT_STATUS, // game state stores players that still play simultaneous turns without contact
+	BATTLE_RESTORE_ARTIFACT_CHARGES, // battle stores initial charges of artifacts to restore them if battle is cancelled
+	CREATURE_REFUSED_JOINING_REMOVED, // wandering creatures no longer store a refused offer to join, the visit tracks it
+	HOTA_HERO_LEVEL_OPTIONS, // persist HotA per-hero experience lock
+	BOAT_LAST_HERO, // boat remembers the last hero that used it, so Summon Boat can prefer boat of the caster
+	SAVE_CHUNKS, // saved game is stored as compressed chunks: metadata, map header, game state
+	GARRISON_DIALOG_REMOVABLE_UNITS_REMOVED, // GarrisonDialog pack no longer carries removableUnits, the client checks CArmedInstance::isLocked
 
 	RELEASE_170 = HOTA_MAP_STACK_COUNT,
 	RELEASE_174 = CUSTOM_GARRISON_TITLE,
 
 	MINIMAL = RELEASE_170,
-	CURRENT = SEER_HUT_NAME_TEXT_ID,
+	CURRENT = GARRISON_DIALOG_REMOVABLE_UNITS_REMOVED,
 };
 
 static_assert(ESerializationVersion::MINIMAL <= ESerializationVersion::CURRENT, "Invalid serialization version definition!");

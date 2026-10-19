@@ -158,13 +158,13 @@ public:
 		return false;
 	}
 
-	void showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID hid, bool removableUnits, const MetaString & customTitle) override
+	void showGarrisonDialog(ObjectInstanceID upobj, ObjectInstanceID hid, const MetaString & customTitle) override
 	{
 	}
 
-	void genericQuery(Query * request, PlayerColor color, std::function<void(std::optional<int32_t>)> callback) override
+	void askToSelectTown(const MapObjectSelectDialog & request, SpellID spell, ObjectInstanceID caster) override
 	{
-		//todo:
+		//todo: no adventure spell under test asks this
 	}
 
 	void mapLoaded(CMap * map) override

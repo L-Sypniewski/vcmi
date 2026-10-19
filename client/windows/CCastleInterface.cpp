@@ -758,7 +758,7 @@ void CCastleBuildings::recreate()
 		auto bayPos = town->bestLocation();
 		if(!bayPos.isValid())
 			logGlobal->warn("Shipyard in non-coastal town!");
-		std::vector <const CGObjectInstance *> vobjs = GAME->interface()->cb->getVisitableObjs(bayPos, false);
+		std::vector <const CGObjectInstance *> vobjs = GAME->interface()->cb->getVisitableObjs(bayPos);
 		//there is visitable obj at shipyard output tile and it's a boat or hero (on boat)
 		if(!vobjs.empty() && (vobjs.front()->ID == Obj::BOAT || vobjs.front()->ID == Obj::HERO))
 		{
@@ -990,7 +990,7 @@ bool CCastleBuildings::buildingTryActivateCustomUI(BuildingID buildingToTest, Bu
 				return true;
 
 		case BuildingID::TAVERN:
-				GAME->interface()->showTavernWindow(town, nullptr, QueryID::NONE);
+				GAME->interface()->showTavernWindow(town, nullptr, QuestionID::NONE);
 				return true;
 
 		case BuildingID::SHIPYARD:
@@ -1101,8 +1101,7 @@ void CCastleBuildings::enterBlacksmith(BuildingID building, ArtifactID artifactI
 	ArtifactID existingArtifact = hero->getReplacedWarMachine(artifactID);
 
 	bool canAfford = GAME->interface()->cb->getResourceAmount(EGameResID::GOLD) >= price;
-	bool hasSameMachine = existingArtifact.hasValue() && existingArtifact == artifactID;
-	bool possible = canAfford && !hasSameMachine;
+	bool possible = canAfford && hero->canRecruitWarMachine(artifactID);
 
 	ENGINE->windows().createAndPushWindow<CBlacksmithDialog>(possible, artifactID, existingArtifact, hero->id);
 }
@@ -1837,7 +1836,7 @@ void CCastleInterface::keyPressed(EShortcut key)
 	}
 	case EShortcut::TOWN_OPEN_TAVERN:
 		if(town->hasBuilt(BuildingID::TAVERN))
-			GAME->interface()->showTavernWindow(town, nullptr, QueryID::NONE);
+			GAME->interface()->showTavernWindow(town, nullptr, QuestionID::NONE);
 		break;
 	case EShortcut::ADVENTURE_OPEN_WIKI:
 		ENGINE->windows().createAndPushWindow<WikiWindow>(

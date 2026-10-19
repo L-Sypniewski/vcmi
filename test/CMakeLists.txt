@@ -29,6 +29,7 @@ set(test_SRCS
 
 		entity/CArtifactTest.cpp
 		entity/CCreatureTest.cpp
+		entity/StackExperienceBonusesTest.cpp
 		entity/CFactionTest.cpp
 		entity/CHeroClassTest.cpp
 		entity/CHeroTest.cpp
@@ -42,16 +43,19 @@ set(test_SRCS
 
 		game/BattleSpellCastTest.cpp
 		game/HeroRecruitmentTest.cpp
+		game/HeroMovementTest.cpp
 		game/HeroSecondarySkillsTest.cpp
 		game/MovementCostTest.cpp
+		game/SaveGameTest.cpp
 		game/VictoryLossTest.cpp
 
 		json/JsonTests.cpp
 
+		serializer/SaveFileTest.cpp
+
 		map/CMapEditManagerTest.cpp
 		map/CMapFormatTest.cpp
 		map/CGArtifactRegressionTest.cpp
-		map/MapComparer.cpp
 		map/MapScriptTest.cpp
 		map/MapObjectDrawOrderTest.cpp
 		map/TinyH3MBuilderTest.cpp
@@ -105,9 +109,13 @@ set(test_SRCS
  		spells/targetConditions/TargetConditionItemFixture.cpp
 
 		server/battles/AcidBreathTest.cpp
+		server/battles/ActionOptionsTest.cpp
 		server/battles/AttackSequenceTest.cpp
 		server/battles/BallistaDamageTest.cpp
+		server/battles/BattleMirrorTest.cpp
+		server/battles/BattleMirrorSessionTest.cpp
 		server/battles/BattleTestFixture.cpp
+		server/battles/BattleTextViewRendererTest.cpp
 		server/battles/CombatEventTriggerTest.cpp
 		server/battles/DamageCalculatorTest.cpp
 		server/battles/BindTest.cpp
@@ -117,16 +125,26 @@ set(test_SRCS
 		server/battles/FireShieldTest.cpp
 		server/battles/HotaAbilitiesTest.cpp
 		server/battles/LifeDrainTest.cpp
+		server/battles/WarMachineResurrectionTest.cpp
+		server/battles/ResurrectionCasualtiesTest.cpp
+		server/battles/MeleeActionTest.cpp
+		server/battles/MoatActionTest.cpp
+		server/battles/NoTargetActionTest.cpp
+		server/battles/RangedActionTest.cpp
 		server/battles/RebirthTest.cpp
 		server/battles/SoulStealTest.cpp
+		server/battles/SpellcastActionTest.cpp
 		server/battles/SummonGuardiansTest.cpp
 		server/battles/TurnOrderTest.cpp
 		server/battles/TransmutationTest.cpp
-		server/queries/QueriesProcessorTest.cpp
+		server/battles/WalkActionTest.cpp
+		server/activities/ActivityProcessorTest.cpp
+		server/ArmyManagementTest.cpp
 
 		texts/TextOperationsTest.cpp
 
 		mock/BattleFake.cpp
+		mock/GameHandlerTestClient.cpp
 		mock/GameHandlerTestServer.cpp
 		mock/mock_IGameEventCallback.cpp
  		mock/mock_MapService.cpp
@@ -144,7 +162,6 @@ set(test_HEADERS
  		CVcmiTestConfig.h
 		JsonComparer.h
 
-		map/MapComparer.h
 
  		netpacks/NetPackFixture.h
 
@@ -155,6 +172,7 @@ set(test_HEADERS
 		server/battles/BattleTestFixture.h
 
 		mock/BattleFake.h
+		mock/GameHandlerTestClient.h
 		mock/GameHandlerTestServer.h
 		mock/mock_BonusBearer.h
 		mock/mock_CStack.h
@@ -185,29 +203,37 @@ endif()
 
 if(ENABLE_NULLKILLER2_AI)
 	list(APPEND test_SRCS
+		nullkiller2/AIGatewayMovementTest.cpp
 		nullkiller2/AIUtilityTest.cpp
+		nullkiller2/Analyzers/ArmyManagerTest.cpp
 		nullkiller2/Analyzers/HeroManagerTest.cpp
 		nullkiller2/Analyzers/ObjectClusterizerTest.cpp
 		nullkiller2/Behaviors/DefenceBehaviorTest.cpp
 		nullkiller2/Behaviors/EscapeBehaviorTest.cpp
-		nullkiller2/Behaviors/ExplorationBehaviorTest.cpp
 		nullkiller2/Behaviors/GatherArmyBehaviorTest.cpp
+		nullkiller2/Behaviors/OneWayPortalBehaviorTest.cpp
 		nullkiller2/Behaviors/RecruitHeroBehaviorTest.cpp
+		nullkiller2/Behaviors/WaterExplorationBehaviorTest.cpp
 		nullkiller2/Engine/PriorityEvaluatorTest.cpp
+		nullkiller2/Engine/ResourceTradingTurnTest.cpp
 		nullkiller2/Engine/TaskFailureTest.cpp
 		nullkiller2/Goals/BuyArmyTest.cpp
+		nullkiller2/Goals/CompleteQuestTest.cpp
 		nullkiller2/Goals/CompositionTest.cpp
+		nullkiller2/Goals/ExecuteHeroChainTest.cpp
 		nullkiller2/Goals/ExploreNeighbourTileTest.cpp
 		nullkiller2/Helpers/ExplorationHelperTest.cpp
 		nullkiller2/Helpers/TinyH3MDimensionDoorExplorationTest.cpp
 		nullkiller2/Pathfinding/AIPathNodePoolTest.cpp
 		nullkiller2/Pathfinding/ArmyLossTest.cpp
 		nullkiller2/Pathfinding/DimensionDoorActionTest.cpp
+		nullkiller2/Pathfinding/QuestActionTest.cpp
 	)
 
 	list(APPEND test_HEADERS
 		nullkiller2/Nulkiller2TestUtils.h
 		nullkiller2/NullkillerTest.h
+		nullkiller2/ScriptedMovementClient.h
 	)
 endif()
 

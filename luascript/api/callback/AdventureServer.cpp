@@ -257,7 +257,7 @@ void AdventureServerProxy::registerMethods(MethodRegistrar & R)
 			{"components", "Optional icons shown under the text."}
 		}, {},
 		"Internal plumbing for the blocking showQuestion / showRewardsMessage helpers: shows a modal dialog and "
-		"registers the query whose reply resumes the paused script. Scripts should call showQuestion / showRewardsMessage instead.");
+		"registers the question whose answer resumes the paused script. Scripts should call showQuestion / showRewardsMessage instead.");
 	R.function<&AdventureServerProxy::spawnCombat>("spawnCombat",
 		{
 			{"host", "The visited event/pandora whose garrison is replaced with the opposing army."},
@@ -399,6 +399,12 @@ void AdventureServerProxy::takeArtifact(IGameEventCallback & object, const CGHer
 
 void AdventureServerProxy::grantCreatures(IGameEventCallback & object, const CGHeroInstance & hero, const Creature & creature, int count)
 {
+	if(count <= 0)
+	{
+		logScript->error("grantCreatures: can not grant %d units of %s", count, creature.getJsonKey());
+		return;
+	}
+
 	CCreatureSet army;
 	army.addToSlot(army.getFreeSlot(), creature.getId(), count);
 	object.giveCreatures(&hero, army);
@@ -406,6 +412,12 @@ void AdventureServerProxy::grantCreatures(IGameEventCallback & object, const CGH
 
 void AdventureServerProxy::takeCreatures(IGameEventCallback & object, const CGHeroInstance & hero, const Creature & creature, int count)
 {
+	if(count <= 0)
+	{
+		logScript->error("takeCreatures: can not take %d units of %s", count, creature.getJsonKey());
+		return;
+	}
+
 	object.takeCreatures(hero.id, {CStackBasicDescriptor(creature.getId(), count)});
 }
 
