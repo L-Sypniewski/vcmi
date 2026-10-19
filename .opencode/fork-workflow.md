@@ -12,7 +12,8 @@ playbook (build lanes, commands, cleanup map). Core rules:
    `develop`: `git merge upstream/develop`, resolve conflicts, sweep green
    (§3 of the playbook) if code was touched, `git push origin develop`.
    Use `upstream/develop` when a pristine upstream base is needed.
-3. **The main checkout stays on `lukasz-experiment`** (agent/infra branch).
+3. **The main checkout stays on `develop`** (it carries the agent infra:
+   `.opencode/`, `.devcontainer/` — PRs #1–#2).
    Feature work happens in sibling worktrees: `../vcmi-<branch-slug>`.
 4. **Push the branch to the fork BEFORE devcontainer bring-up** — the container
    seeds its workspace volume by cloning the branch from the fork.
@@ -29,6 +30,6 @@ playbook (build lanes, commands, cleanup map). Core rules:
 7. **Never commit** `.env` or credential files (auth JSONs). `.devcontainer/`
    is tracked on `develop` since PR #2 — branches cut from current develop
    carry it natively; only branches predating that merge borrow it untracked
-   from `lukasz-experiment`.
+   from the main checkout (`git show origin/develop:.devcontainer/$f`).
 8. **Consult the cleanup map** in the playbook before creating new host or
    Docker artifacts; reuse existing volumes, venv, and caches.

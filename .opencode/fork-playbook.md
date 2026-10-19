@@ -30,8 +30,8 @@ this machine (Apple Silicon macOS, Xcode CLT, colima). Companion to
   battle-telnet-mirror work was once PRed upstream (#7924) and closed — the
   fork-only policy is deliberate; do not resubmit upstream. The open fork PR
   is `L-Sypniewski/vcmi#1` (`ship/battle-telnet-mirror` → fork `develop`).
-- Main checkout `/Users/lukasz/Documents/developer/vcmi` stays on
-  `lukasz-experiment` (this agent/infra branch: `.opencode/`, `.devcontainer/`).
+- Main checkout `/Users/lukasz/Documents/developer/vcmi` stays on `develop`
+  (carries the agent infra via PR #2: `.opencode/`, `.devcontainer/`).
   Feature work goes in sibling worktrees `../vcmi-<branch-slug>` — this matches
   the devcontainer's per-worktree volume design.
 
@@ -56,16 +56,16 @@ colima start --cpu 4 --memory 8        # container hard requirement; profile def
 cd ../vcmi-<slug>
 # Branches cut from current develop carry .devcontainer/ natively (PR #2).
 # Only branches predating that merge (or cut from upstream) need to borrow it
-# untracked from lukasz-experiment:
+# untracked from the main checkout (on develop):
 for f in README.md devcontainer.json devcontainer-lock.json fetch-h3-data.sh \
          init-volume.sh set-git-identity.sh; do
-  git -C ~/Documents/developer/vcmi show lukasz-experiment:.devcontainer/$f \
+  git -C ~/Documents/developer/vcmi show origin/develop:.devcontainer/$f \
     > .devcontainer/$f
 done
 devcontainer up --workspace-folder .
 ```
 
-Mechanics (from `.devcontainer/devcontainer.json` on `lukasz-experiment`):
+Mechanics (from `.devcontainer/devcontainer.json` on `develop`):
 
 - Workspace is a **named volume** `vcmi-<worktree-folder-basename>`, seeded
   **once** by cloning the checked-out branch from the fork — push first, and
@@ -233,17 +233,15 @@ pre-dates this workflow).
 - Orphaned host processes (a subagent session ending while its build runs)
   survive — verify with `ps`, park a `while kill -0 <pid>` watcher, and
   validate results after.
-- Never commit `.devcontainer/`, `.env`, `opencode-auth*.json`, or build
-  output. Check `git status --porcelain` before every commit in volume clones.
+- Never commit `.env`, `opencode-auth*.json`, or build output. Check
+  `git status --porcelain` before every commit in volume clones.
 - Submodule pins move during merges between branches — a dirty `dependencies`
   in the main checkout after switching branches is expected;
   `git submodule update dependencies` restores it.
-- **The fork docs live on `lukasz-experiment` and `develop` and must stay
-  identical**: edit `.opencode/fork-workflow.md` +
-  `.opencode/fork-playbook.md` (and the `AGENTS.md` fork section) on
-  `lukasz-experiment` first, commit, then apply the same change on a local
-  `develop` and push both — only ever commit these doc paths, never build
-  output or `.devcontainer/`. On the local `develop`, run `git fetch origin`
-  then `git reset --hard origin/develop` BEFORE applying (a stale local
-  branch — or stale remote-tracking refs after a fresh merge on GitHub —
-  bases the commit on outdated history and the push gets rejected).
+- **The fork docs live on `develop`** (the main checkout): edit
+  `.opencode/fork-workflow.md` + `.opencode/fork-playbook.md` (and the
+  `AGENTS.md` fork section) there, commit, push — after `git fetch origin`,
+  make sure the branch matches `origin/develop` first (stale local branch or
+  stale remote-tracking refs after a remote merge base the commit on
+  outdated history and the push gets rejected). Only ever commit these doc
+  paths, never build output, `.env`, or credential files.
