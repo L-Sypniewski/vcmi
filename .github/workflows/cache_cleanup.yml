@@ -1,8 +1,6 @@
 name: Cleanup GitHub runner caches on closed PRs
 on:
-  pull_request:
-    types:
-      - closed
+  workflow_dispatch:
 
 jobs:
   cleanup:

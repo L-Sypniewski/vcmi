@@ -10,11 +10,13 @@
 #include "StdInc.h"
 #include "CVCMIServer.h"
 
+#include "battles/BattleMirrorServer.h"
 #include "CGameHandler.h"
 #include "GlobalLobbyProcessor.h"
 #include "LobbyNetPackVisitors.h"
 #include "processors/PlayerMessageProcessor.h"
 
+#include "../lib/CConfigHandler.h"
 #include "../lib/CThreadHelper.h"
 #include "../lib/GameLibrary.h"
 #include "../lib/CPlayerState.h"
@@ -86,7 +88,32 @@ CVCMIServer::CVCMIServer(uint16_t port, bool runByClient)
 
 	networkHandler = INetworkHandler::createHandler();
 
-	if(state == EServerState::LOBBY)
+	try
+	{
+		const auto & mirrorConfig = settings["server"]["battleMirror"];
+		if(mirrorConfig["enabled"].Bool())
+		{
+			std::string hostname = mirrorConfig["hostname"].String();
+			if(hostname.empty())
+				hostname = "127.0.0.1";
+			// schema validation only warns on out-of-range ports (its result is discarded at load), so this clamp is the actual enforcement
+			int64_t mirrorPort = mirrorConfig["port"].Integer();
+			if(mirrorPort < 0 || mirrorPort > 65535)
+			{
+				logNetwork->warn("Battle mirror port %d out of range, clamping to the valid port range", static_cast<int>(mirrorPort));
+				mirrorPort = std::clamp(mirrorPort, static_cast<int64_t>(0), static_cast<int64_t>(65535));
+			}
+			battleMirror = std::make_unique<BattleMirrorServer>(networkHandler->getContext(), hostname, static_cast<uint16_t>(mirrorPort));
+			battleMirror->start();
+		}
+	}
+	catch(const std::exception & e)
+	{
+		battleMirror.reset();
+		logNetwork->error("Battle mirror failed to start: %s", e.what());
+	}
+
+	if(state.load(std::memory_order_relaxed) == EServerState::LOBBY)
 		startDiscoveryListener();
 }
 
@@ -151,21 +178,27 @@ void CVCMIServer::onPacketReceived(const std::shared_ptr<INetworkConnection> & c
 
 void CVCMIServer::setState(EServerState value)
 {
-	if (value == EServerState::SHUTDOWN && state == EServerState::SHUTDOWN)
+	const EServerState currentState = state.load(std::memory_order_relaxed);
+
+	if (value == EServerState::SHUTDOWN && currentState == EServerState::SHUTDOWN)
 		logGlobal->warn("Attempt to shutdown already shutdown server!");
 
 	// do not attempt to restart dying server
-	assert(state != EServerState::SHUTDOWN || state == value);
+	assert(currentState != EServerState::SHUTDOWN || currentState == value);
 
-	if(state != EServerState::LOBBY && value == EServerState::LOBBY && discoveryListener)
+	if(currentState != EServerState::LOBBY && value == EServerState::LOBBY && discoveryListener)
 		startDiscoveryListener();
-	if(state == EServerState::LOBBY && value != EServerState::LOBBY && discoveryListener)
+	if(currentState == EServerState::LOBBY && value != EServerState::LOBBY && discoveryListener)
 		stopDiscoveryListener();
 
-	state = value;
+	state.store(value, std::memory_order_relaxed);
 
-	if (state == EServerState::SHUTDOWN)
+	if (value == EServerState::SHUTDOWN)
+	{
+		if (battleMirror)
+			battleMirror->closeAll();
 		networkHandler->stop();
+	}
 }
 void CVCMIServer::startDiscoveryListener()
 {
@@ -186,7 +219,7 @@ void CVCMIServer::stopDiscoveryListener()
 
 EServerState CVCMIServer::getState() const
 {
-	return state;
+	return state.load(std::memory_order_relaxed);
 }
 
 bool CVCMIServer::isInLobby() const
@@ -258,6 +291,18 @@ void CVCMIServer::prepareToRestart()
 		activeConnection->enterLobbyConnectionMode();
 
 	gh = nullptr;
+	if(battleMirror)
+	{
+		// the mirror keeps a raw pointer to the state being dropped, so it must forget it here
+		try
+		{
+			battleMirror->reset();
+		}
+		catch(const std::exception & e)
+		{
+			logNetwork->error("Battle mirror error: %s", e.what());
+		}
+	}
 }
 
 bool CVCMIServer::prepareToStartGame()
@@ -1249,6 +1294,17 @@ void CVCMIServer::applyPack(CPackForClient & pack)
 	for (const auto & c : activeConnections)
 		c->sendPack(pack);
 	gh->gs->apply(pack);
+	if(battleMirror)
+	{
+		try
+		{
+			battleMirror->onPackApplied(pack, *gh->gs);
+		}
+		catch(const std::exception & e)
+		{
+			logNetwork->error("Battle mirror error: %s", e.what());
+		}
+	}
 	logNetwork->trace("\tApplied on gameState(): %s", typeid(pack).name());
 }
 

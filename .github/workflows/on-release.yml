@@ -1,7 +1,6 @@
 name: Notify other repos of release
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 jobs:
   notify_repos:
     if: ${{ !github.event.release.prerelease }}

@@ -14,6 +14,8 @@
 #include "../lib/network/NetworkInterface.h"
 #include "../lib/StartInfo.h"
 
+#include <atomic>
+
 class CMapInfo;
 
 struct CPackForLobby;
@@ -29,6 +31,7 @@ class CGameHandler;
 class CBaseForServerApply;
 class CBaseForGHApply;
 class GlobalLobbyProcessor;
+class BattleMirrorServer;
 
 class CVCMIServer : public LobbyInfo, public INetworkServerListener, public INetworkTimerListener, public IServerDiscoveryAnnouncer, public IGameServer
 {
@@ -39,10 +42,14 @@ class CVCMIServer : public LobbyInfo, public INetworkServerListener, public INet
 	/// Network server instance that receives and processes incoming connections on active socket
 	std::unique_ptr<INetworkServer> networkServer;
 
+	/// Telnet battle mirror listener, null when disabled in settings
+	std::unique_ptr<BattleMirrorServer> battleMirror;
+
 	/// Handles connection with global lobby. Must be constructed and destroyed after network handler
 	std::unique_ptr<GlobalLobbyProcessor> lobbyProcessor;
 
-	EServerState state = EServerState::LOBBY;
+	/// Shutdown is signalled from the client thread while io-thread handlers poll this — atomic, relaxed ordering suffices
+	std::atomic<EServerState> state = EServerState::LOBBY;
 
 	std::shared_ptr<GameConnection> findConnection(const std::shared_ptr<INetworkConnection> &);
 
